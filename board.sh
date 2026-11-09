@@ -118,28 +118,30 @@ show_bead() {
 }
 
 # A terminal-browser pane of this herdr workspace already showing the board is the nearest
-# tab of all: the page beside the conversation moves to the Bead.
+# tab of all, so it is the one shown in; a click that finds none gets a new pane below.
 workspace=${HERDR_WORKSPACE_ID:-${pane%%:*}}
 board_tab=$(board_tab_in "$(workspace_panes "$workspace")")
-[ -n "$board_tab" ] && show_bead "$board_tab" && exit 0
 
-# No board tab here: open one in a split to the right, as open.sh opens a web link. The
-# split is herdr's, not `terminal-browser open --split`, whose bare Electron crashes in
-# herdr (open.sh has the details).
-new_pane=$("$herdr" pane split --pane "$pane" --direction right --focus |
-	python3 -c 'import json, sys; print(json.load(sys.stdin)["result"]["pane"]["pane_id"])')
-[ -n "$new_pane" ] || { echo "click-open: herdr opened no pane" >&2; exit 1; }
-"$herdr" pane run "$new_pane" "exec terminal-browser open $(printf '%q' "$base")"
+if [ -z "$board_tab" ]; then
+	# No board tab here: open one in a split to the right, as open.sh opens a web link. The
+	# split is herdr's, not `terminal-browser open --split`, whose bare Electron crashes in
+	# herdr (open.sh has the details).
+	new_pane=$("$herdr" pane split --pane "$pane" --direction right --focus |
+		python3 -c 'import json, sys; print(json.load(sys.stdin)["result"]["pane"]["pane_id"])')
+	[ -n "$new_pane" ] || { echo "click-open: herdr opened no pane" >&2; exit 1; }
+	"$herdr" pane run "$new_pane" "exec terminal-browser open $(printf '%q' "$base")"
 
-# The new browser takes a moment to register; once its tab shows in that pane, show the
-# Bead in it. Ten seconds is far longer than terminal-browser takes to start, and keeps a
-# stuck start from leaving the click hanging.
-board_tab=
-for _ in $(seq 1 50); do
-	board_tab=$(board_tab_in "$new_pane")
-	[ -n "$board_tab" ] && break
-	sleep 0.2
-done
-[ -n "$board_tab" ] && show_bead "$board_tab" && exit 0
-echo "click-open: the board did not open in the new pane" >&2
-exit 1
+	# The new browser takes a moment to register; once its tab shows in that pane, the Bead
+	# is shown in it. Ten seconds is far longer than terminal-browser takes to start, and
+	# keeps a stuck start from leaving the click hanging.
+	for _ in $(seq 1 50); do
+		board_tab=$(board_tab_in "$new_pane")
+		[ -n "$board_tab" ] && break
+		sleep 0.2
+	done
+	[ -n "$board_tab" ] || { echo "click-open: the board did not open in the new pane" >&2; exit 1; }
+fi
+
+# The tab the click chose, whether it was already here or came with the new pane, gets the
+# page that saves the project and moves to the Bead.
+show_bead "$board_tab" || { echo "click-open: terminal-browser did not show the Bead in its tab" >&2; exit 1; }

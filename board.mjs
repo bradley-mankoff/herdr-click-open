@@ -17,13 +17,13 @@ import { join } from "node:path";
 
 const [port, project] = process.argv.slice(2);
 
-let database = false;
+let hasDatabase = false;
 try {
-	database = statSync(join(project, ".beads")).isDirectory();
+	hasDatabase = statSync(join(project, ".beads")).isDirectory();
 } catch {
-	database = false;
+	// A path that is not there, or not a folder, holds no database either.
 }
-if (!database) {
+if (!hasDatabase) {
 	console.error(`click-open: ${project} has no .beads folder, so the board is not switched there`);
 	process.exit(2);
 }

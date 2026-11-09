@@ -161,8 +161,8 @@ const makeMachine = (): Machine => {
 	writeFileSync(fixtures.browsers, '{"self":null,"browsers":[]}\n');
 	writeFileSync(fixtures.pane, '{"result":{"pane":{"pane_id":"wA:p9"}}}\n');
 
-	// `pane run` starts terminal-browser in the new pane, so the browser it starts shows up
-	// in `terminal-browser ls --all --json` from then on.
+	// The herdr stand-in: `pane list` and `pane split` answer from fixtures, and `pane run`
+	// leaves the browser it starts behind for `terminal-browser ls`.
 	stub(
 		join(bin, "herdr"),
 		logs.herdr,
@@ -170,9 +170,9 @@ const makeMachine = (): Machine => {
 "pane list") cat '${fixtures.panes}' ;;
 "pane split") cat '${fixtures.pane}' ;;
 "pane run")
-	pane=$3
-	set -- $4
-	printf '{"self":null,"browsers":[{"key":"90109-1","pane":{"tab":"wA:t9","pane":"%s"},"tabs":[{"id":"7","url":"%s","active":true}]}]}\\n' "$pane" "$4" > '${fixtures.browsers}'
+	# The command's last word is the address terminal-browser opens, so the browser it starts
+	# answers terminal-browser's own listing from then on.
+	printf '{"self":null,"browsers":[{"key":"90109-1","pane":{"tab":"wA:t9","pane":"%s"},"tabs":[{"id":"7","url":"%s","active":true}]}]}\\n' "$3" "\${4##* }" > '${fixtures.browsers}'
 	;;
 esac
 exit 0`,
@@ -243,6 +243,20 @@ const assertPageShowsBead = (script: string, repo: string, issue: string) => {
 	);
 };
 
+/** The tab the click chose is the one told to show the Bead, and no default browser is asked. */
+const assertShownInTab = (mac: Machine, browser: string, tab: string, repo: string) => {
+	const shown = calls(mac.logs.terminalBrowser).find((call) => call[0] === "action");
+	assert.ok(shown, "a terminal-browser tab is told to show the Bead");
+	assert.deepEqual(
+		shown.slice(0, 7),
+		["action", "--browser", browser, "--tab", tab, "--follow", "--"],
+		"the tab the click chose is shown the Bead",
+	);
+	assert.equal(shown[7], "eval");
+	assertPageShowsBead(shown[8], repo, "fac-qpv.7.2");
+	assert.deepEqual(calls(mac.logs.open), [], "no default-browser tab is opened");
+};
+
 /** One click against a stand-in board and a temporary Mac, both cleaned up whatever the click did. */
 const withBoardAndMac = async (run: (board: Board, mac: Machine) => Promise<void>) => {
 	const board = await boardStub();
@@ -280,12 +294,7 @@ test("a board link switches the board to the link's project and shows the Bead i
 
 		assertBoardSwitched(board, repo);
 		assert.deepEqual(calls(mac.logs.herdr), [["pane", "list", "--workspace", "wA"]], "herdr is asked which panes this workspace has");
-		const shown = calls(mac.logs.terminalBrowser).find((call) => call[0] === "action");
-		assert.ok(shown, "the board's tab is told to show the Bead");
-		assert.deepEqual(shown.slice(0, 7), ["action", "--browser", "90107-1", "--tab", "2", "--follow", "--"], "the board's tab in this workspace is shown");
-		assert.equal(shown[7], "eval");
-		assertPageShowsBead(shown[8], repo, "fac-qpv.7.2");
-		assert.deepEqual(calls(mac.logs.open), [], "no default-browser tab is opened");
+		assertShownInTab(mac, "90107-1", "2", repo);
 	}));
 
 test("with no board tab in this herdr workspace, the click splits the clicked pane to the right and opens terminal-browser there, then shows the Bead", () =>
@@ -314,12 +323,7 @@ test("with no board tab in this herdr workspace, the click splits the clicked pa
 			],
 			"the clicked pane is split to the right and terminal-browser opens there",
 		);
-		const shown = calls(mac.logs.terminalBrowser).find((call) => call[0] === "action");
-		assert.ok(shown, "the new pane's tab is told to show the Bead");
-		assert.deepEqual(shown.slice(0, 7), ["action", "--browser", "90109-1", "--tab", "7", "--follow", "--"], "the browser in the new pane is shown");
-		assert.equal(shown[7], "eval");
-		assertPageShowsBead(shown[8], repo, "fac-qpv.7.2");
-		assert.deepEqual(calls(mac.logs.open), [], "no default-browser tab is opened");
+		assertShownInTab(mac, "90109-1", "7", repo);
 	}));
 
 test("a board link to a project with no .beads folder is refused, and the board is left where it was", () =>
