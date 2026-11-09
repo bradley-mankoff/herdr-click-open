@@ -4,9 +4,6 @@
 # percent-encoded parts.
 export PATH="$HOME/.local/bin:/opt/homebrew/bin:$PATH"
 herdr=${HERDR_BIN_PATH:-herdr}
-# The markdown viewer a board link opens. Like herdr, a stand-in can name it, and the tests
-# name one nothing provides to exercise the fallback for a Mac without glow.
-glow=${GLOW_BIN_PATH:-glow}
 
 # A URL component's text: bead-links.ts writes a link's values with encodeURIComponent, and a
 # file link's path the same way.

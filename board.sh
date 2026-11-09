@@ -4,7 +4,9 @@
 # link, asks `bd show --json` in that project for the Bead, builds a markdown page from the
 # answer (bead-page.py) and opens glow on the page in its pager. glow rather than micro, a text
 # editor that cannot render markdown: bd show's own boxed layout would reach glow as text, so
-# the page is built from bd's JSON instead.
+# the page is built from bd's JSON instead. It never asks the board, terminal-browser, the
+# default browser or AppleScript, so a link opens even when the board would show an error, and
+# both Macs behave the same.
 #
 # The page must reach the screen as formatted text, with none of markdown's symbols on it, so
 # glow is handed the style in glow-style.json rather than its own default, and the pager is
@@ -62,16 +64,19 @@ fail() {
 	exit 1
 }
 
+# Like herdr, a stand-in can name the markdown viewer, and the tests name one nothing provides
+# to exercise the fallback for a Mac without it.
+glow=${GLOW_BIN_PATH:-glow}
+have_glow=
+if command -v "$glow" >/dev/null 2>&1; then
+	have_glow=1
+fi
+
 # glow takes a placeholder such as <id> for an HTML tag and shows nothing for it, so the page
 # glow gets has each '<' outside code escaped; micro shows the page as written, so it gets the
 # page unescaped.
-page_option=
-if command -v "$glow" >/dev/null 2>&1; then
-	page_option=--for-glow
-fi
-
 if ! (unset BEADS_DIR; cd "$project" && bd show "$issue" --json) 2>"$bd_error" |
-	python3 "$here/bead-page.py" ${page_option:+"$page_option"} >"$page_file"; then
+	python3 "$here/bead-page.py" ${have_glow:+--for-glow} >"$page_file"; then
 	echo "click-open: could not read $issue in $project:" >&2
 	sed 's/^/  /' "$bd_error" >&2
 	fail
@@ -80,13 +85,8 @@ rm -f "$bd_error"
 
 # glow renders the page; a Mac without it opens the same page as text in micro below. The pane
 # keeps the Bead in view until the viewer exits.
-if [ -n "$page_option" ]; then
+if [ -n "$have_glow" ]; then
 	direction=right
-	# glow-style.json is glow's dark style (from glamour, the renderer behind glow) with two
-	# changes: its heading entries carry no '#' prefix, because a rendered Bead must show a
-	# heading as styled text, not as the markdown that makes it one, and its task entries draw
-	# real checkboxes instead of dark style's '[ ]' brackets for the same reason.
-	#
 	# glow hands the rendered page to $PAGER, or to `less -r` when it is unset, and less fills
 	# the pane below a short page with '~' lines and ends its prompt with '(END)'. The pager is
 	# told to print neither: --tilde leaves the fill lines out, and a prompt of one space shows

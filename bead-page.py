@@ -84,8 +84,9 @@ def page(issue: dict, for_glow: bool) -> str:
     issue_type = text(issue, "issue_type")
     if issue_type:
         details.append(f"- Type: {issue_type}")
-    if issue.get("priority") is not None:
-        details.append(f"- Priority: P{issue['priority']}")
+    priority = issue.get("priority")
+    if priority is not None:
+        details.append(f"- Priority: P{priority}")
     assignee = text(issue, "assignee")
     if assignee:
         details.append(f"- Assignee: {assignee}")
