@@ -6,6 +6,12 @@
 # editor that cannot render markdown: bd show's own boxed layout would reach glow as text, so
 # the page is built from bd's JSON instead.
 #
+# The page must reach the screen as formatted text, with none of markdown's symbols on it, so
+# glow is handed the style in glow-style.json rather than its own default, and the pager is
+# told to print neither its fill lines nor its end prompt. glow-style.json is glamour's dark
+# style, the one glow uses on a dark terminal, with the '#' prefixes removed from its heading
+# entries and checkbox glyphs in place of the dark style's '[ ]' task markers.
+#
 # The rendering is a copy, so an edit cannot reach the Bead; glow only reads it. A Mac without
 # glow gets the page as raw text in micro, in a split below the clicked pane, so the text uses
 # the pane's full width instead of a pane that opens empty. micro opens it read-only.
@@ -68,7 +74,18 @@ rm -f "$bd_error"
 # keeps the Bead in view until the viewer exits.
 if command -v "$glow" >/dev/null 2>&1; then
 	direction=right
-	viewer=("$glow" -p "$page_file")
+	# glow-style.json is glow's dark style (from glamour, the renderer behind glow) with two
+	# changes: its heading entries carry no '#' prefix, because a rendered Bead must show a
+	# heading as styled text, not as the markdown that makes it one, and its task entries draw
+	# real checkboxes instead of dark style's '[ ]' brackets for the same reason.
+	#
+	# glow hands the rendered page to $PAGER, or to `less -r` when it is unset, and less fills
+	# the pane below a short page with '~' lines and ends its prompt with '(END)'. The pager is
+	# told to print neither: --tilde leaves the fill lines out, and a prompt of one space shows
+	# nothing where less would print '(END)'. It travels in the pane's own command, so glow has
+	# it however herdr starts the pane.
+	pager="less -R --tilde -P ' '"
+	viewer=(env "PAGER=$pager" "$glow" -s "$here/glow-style.json" -p "$page_file")
 else
 	direction=down
 	viewer=(micro -readonly true "$page_file")

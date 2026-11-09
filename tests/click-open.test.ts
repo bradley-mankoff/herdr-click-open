@@ -2,9 +2,12 @@
  * The click-open herdr plugin's board action (herdr-click-open-0h4): Ctrl-clicking a board
  * link splits the clicked pane to the right and opens glow on a markdown page built from
  * `bd show --json` in the link's project, so the Bead reads as formatted markdown
- * (herdr-click-open-df7). A Mac without glow gets the same page as raw text in micro, in a
- * split below. The pane always shows a temporary copy, so no edit reaches the Bead, and
- * neither the board, terminal-browser, the default browser nor AppleScript takes part.
+ * (herdr-click-open-df7). glow renders the page with the plugin's own glamour style, whose
+ * headings carry no `#` markers, and hands it to a pager told to print neither fill lines nor
+ * an end prompt, so no markdown symbol and no pager furniture reaches the screen. A Mac
+ * without glow gets the same page as raw text in micro, in a split below. The pane always
+ * shows a temporary copy, so no edit reaches the Bead, and neither the board,
+ * terminal-browser, the default browser nor AppleScript takes part.
  *
  * The seam is the plugin's board action, run the way herdr runs it: `bash board.sh` in a
  * herdr pane, with the clicked link in `HERDR_PLUGIN_CLICKED_URL`. herdr, bd, glow and micro
@@ -33,6 +36,8 @@ type Logs = {
 	bd: string;
 	bdCwd: string;
 	glow: string;
+	/** The pager glow was told to run, one line per glow call. */
+	pager: string;
 	micro: string;
 	terminalBrowser: string;
 	open: string;
@@ -55,6 +60,8 @@ type Machine = {
 	shown: () => string[];
 	/** The page glow was handed, one block per glow call. */
 	rendered: () => string[];
+	/** The pager glow was given, one command per glow call. */
+	pagers: () => string[];
 };
 
 /** A stand-in at one edge: it writes down each call's arguments, then answers. */
@@ -91,6 +98,7 @@ const makeMachine = (options: { renderer?: boolean } = {}): Machine => {
 		bd: join(dir, "bd.log"),
 		bdCwd: join(dir, "bd-cwd.log"),
 		glow: join(dir, "glow.log"),
+		pager: join(dir, "glow-pager.log"),
 		micro: join(dir, "micro.log"),
 		terminalBrowser: join(dir, "terminal-browser.log"),
 		open: join(dir, "open.log"),
@@ -137,9 +145,15 @@ fi
 printf '%s\\n' '{"id":"'"$2"'","title":"Fixture Bead","description":"The board shows this **description**.\\n\\n- one\\n- two","acceptance_criteria":"- met: a fixture criterion","status":"in_progress","issue_type":"task","priority":2,"assignee":"A Human","created_at":"2026-11-09T21:15:44Z"}'`,
 	);
 
-	// The glow stand-in: it keeps the page it was handed, the way micro's does.
+	// The glow stand-in: it keeps the page it was handed, the way micro's does, and writes
+	// down the pager it would hand that page to, the way glow reads PAGER.
 	if (renderer) {
-		stub(join(bin, "glow"), logs.glow, keepLast(fixtures.rendered));
+		stub(
+			join(bin, "glow"),
+			logs.glow,
+			`${keepLast(fixtures.rendered)}
+printf '%s\\n' "$PAGER" >> '${logs.pager}'`,
+		);
 	}
 
 	// The micro stand-in: it keeps the content it was handed.
@@ -184,7 +198,8 @@ printf '%s\\n' '{"id":"'"$2"'","title":"Fixture Bead","description":"The board s
 	const blocks = (path: string) => logged(path).split(`${keptMarker}\n`).slice(1);
 	const shown = () => blocks(fixtures.shown);
 	const rendered = () => blocks(fixtures.rendered);
-	return { home, temp, logs, project, failBd, click, temps, shown, rendered };
+	const pagers = () => logged(logs.pager).split("\n").filter((line) => line !== "");
+	return { home, temp, logs, project, failBd, click, temps, shown, rendered, pagers };
 };
 
 /** The calls a stand-in was given, one array of arguments per call; a log never written is no calls. */
@@ -209,10 +224,42 @@ const bdProjects = (mac: Machine): string[] => {
 /** The command herdr was asked to run in the new pane. */
 const paneCommandOf = (run: string[]): string => run[3];
 
-/** The temporary file a pane's viewer opened. */
-const paneFileOf = (run: string[]): string => {
+/**
+ * The words of that command, as the pane's shell will read them back. The command is written
+ * with printf %q, which escapes a space inside a word as a backslash and wraps awkward text in
+ * single quotes.
+ */
+const paneWordsOf = (run: string[]): string[] => {
+	const words: string[] = [];
+	let word = "";
+	let inWord = false;
 	const command = paneCommandOf(run);
-	return command.slice(command.lastIndexOf(" ") + 1);
+	for (let i = 0; i < command.length; i += 1) {
+		const character = command[i];
+		if (character === "\\") {
+			word += command[(i += 1)];
+			inWord = true;
+		} else if (character === "'") {
+			inWord = true;
+			while (i + 1 < command.length && command[i + 1] !== "'") word += command[(i += 1)];
+			i += 1;
+		} else if (character === " ") {
+			if (inWord) words.push(word);
+			word = "";
+			inWord = false;
+		} else {
+			word += character;
+			inWord = true;
+		}
+	}
+	if (inWord) words.push(word);
+	return words;
+};
+
+/** The temporary file a pane's viewer opened: the command's last word. */
+const paneFileOf = (run: string[]): string => {
+	const words = paneWordsOf(run);
+	return words[words.length - 1];
 };
 
 /** The page went to a temporary file outside the project, so an edit cannot write back. */
@@ -234,15 +281,54 @@ const assertPage = (page: string, issue: string) => {
 	);
 };
 
-/** The pane shows a read-only copy of a click's page, outside the project. */
+/** glow renders the page with the plugin's own style, which prints no markdown marker. */
+const assertRenderedWithoutMarkers = (run: string[]) => {
+	const words = paneWordsOf(run);
+	const flag = words.indexOf("-s");
+	assert.notEqual(flag, -1, `glow is handed the plugin's own style: ${paneCommandOf(run)}`);
+	const stylePath = words[flag + 1];
+	assert.ok(existsSync(stylePath), `the style glow is handed exists: ${stylePath}`);
+	const style = JSON.parse(readFileSync(stylePath, "utf8"));
+	for (const heading of ["h1", "h2", "h3", "h4", "h5", "h6"]) {
+		assert.doesNotMatch(
+			style[heading]?.prefix ?? "",
+			/#/,
+			`the style prints no markdown marker before a ${heading} heading: ${JSON.stringify(style[heading])}`,
+		);
+	}
+	for (const state of ["ticked", "unticked"]) {
+		const marker = style.task?.[state] ?? "";
+		assert.ok(marker, `the style draws a ${state} task item as a checkbox: ${JSON.stringify(style.task)}`);
+		assert.doesNotMatch(
+			marker,
+			/[[\]]/,
+			`the style draws a ${state} task item as a checkbox, not as markdown brackets: ${marker}`,
+		);
+	}
+};
+
+/** The pager is told to print neither its fill lines nor its end prompt. */
+const assertQuietPager = (mac: Machine, index = 0) => {
+	const pager = mac.pagers()[index];
+	assert.ok(pager, "glow is given a pager");
+	assert.match(pager, /(^|\s)less(\s|$)/, `the pager is less: ${pager}`);
+	assert.match(pager, /(^|\s)--tilde(\s|$)/, `the pager leaves out its fill lines: ${pager}`);
+	assert.match(pager, /-P ' '/, `the pager prints no prompt of its own: ${pager}`);
+};
+
+/** The pane shows a read-only copy of a click's page, outside the project, with nothing on it but the Bead. */
 const assertRenderedCopy = (mac: Machine, run: string[], issue: string, repo: string, index = 0) => {
-	const command = paneCommandOf(run);
-	const [binary, flag] = command.replace(/^exec /, "").split(" ");
-	assert.equal(basename(binary), "glow", `the pane opens glow: ${command}`);
-	assert.equal(flag, "-p", `glow opens in its pager, a viewer that cannot write: ${command}`);
+	const words = paneWordsOf(run);
+	assert.ok(
+		words.some((word) => basename(word) === "glow"),
+		`the pane opens glow: ${paneCommandOf(run)}`,
+	);
+	assert.ok(words.includes("-p"), `glow shows the page in its pager, a viewer that cannot write: ${paneCommandOf(run)}`);
 	// glow renders only a file it takes for markdown by its name, and shows any other as text.
-	assert.match(paneFileOf(run), /\.md$/, `glow is handed a markdown file, so it renders the page: ${command}`);
+	assert.match(paneFileOf(run), /\.md$/, `glow is handed a markdown file, so it renders the page: ${paneCommandOf(run)}`);
 	assertTempCopy(mac, paneFileOf(run), repo);
+	assertRenderedWithoutMarkers(run);
+	assertQuietPager(mac, index);
 	const page = mac.rendered()[index];
 	assert.ok(page, "glow is handed the Bead's page");
 	assertPage(page, issue);
@@ -285,7 +371,7 @@ async function failingBoard() {
 	};
 }
 
-test("a board link splits the clicked pane to the right and opens glow on the Bead rendered as markdown", () =>
+test("a board link splits the clicked pane to the right and opens glow on the Bead rendered as markdown, with no markdown marker on screen", () =>
 	withMachine(async (mac) => {
 		const repo = mac.project("factory");
 
