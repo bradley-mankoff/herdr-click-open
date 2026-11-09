@@ -63,6 +63,9 @@ const stub = (path: string, log: string, body: string) => {
 	chmodSync(path, 0o755);
 };
 
+/** A log file's text, where a log never written is no text. */
+const logged = (path: string): string => (existsSync(path) ? readFileSync(path, "utf8") : "");
+
 /** One temporary Mac: project folders, and stand-ins for herdr, bd, micro and the rest. */
 const makeMachine = (): Machine => {
 	const dir = mkdtempSync(join(tmpdir(), "factory-click-open-"));
@@ -161,17 +164,15 @@ cat -- "$last" >> '${fixtures.shown}'`,
 	};
 	const failBd = () => writeFileSync(fixtures.bdFails, "");
 	const temps = () => readdirSync(temp);
-	const shown = () =>
-		existsSync(fixtures.shown) ? readFileSync(fixtures.shown, "utf8").split("---SHOWN---\n").slice(1) : [];
+	const shown = () => logged(fixtures.shown).split("---SHOWN---\n").slice(1);
 	return { home, temp, logs, project, failBd, click, temps, shown };
 };
 
 /** The calls a stand-in was given, one array of arguments per call; a log never written is no calls. */
 const calls = (path: string): string[][] => {
-	if (!existsSync(path)) return [];
 	const blocks: string[][] = [];
 	let current: string[] | undefined;
-	for (const line of readFileSync(path, "utf8").split("\n")) {
+	for (const line of logged(path).split("\n")) {
 		if (line === "---") {
 			current = [];
 			blocks.push(current);
@@ -181,20 +182,27 @@ const calls = (path: string): string[][] => {
 };
 
 /** The projects bd was run in, in call order. */
-const bdProjects = (mac: Machine): string[] =>
-	existsSync(mac.logs.bdCwd) ? readFileSync(mac.logs.bdCwd, "utf8").trim().split("\n") : [];
+const bdProjects = (mac: Machine): string[] => {
+	const projects = logged(mac.logs.bdCwd).trim();
+	return projects === "" ? [] : projects.split("\n");
+};
 
 /** The temporary file a pane's micro command opened. */
-const pageOf = (run: string[]): string => {
+const beadFileOf = (run: string[]): string => {
 	const command = run[3];
 	assert.match(command, /^exec micro -readonly true /, `the pane runs micro read-only: ${command}`);
 	return command.slice(command.lastIndexOf(" ") + 1);
 };
 
+/** bd's rendering went to a temporary file outside the project, so an edit cannot write back. */
+const assertTempCopy = (mac: Machine, beadFile: string, repo: string) => {
+	assert.ok(beadFile.startsWith(`${mac.temp}/`), `the Bead is rendered to a temporary file: ${beadFile}`);
+	assert.ok(!beadFile.startsWith(`${repo}/`), "the temporary file is outside the project, so an edit cannot write back to the Bead");
+};
+
 /** The temporary file holds bd's rendering of this Bead in this project. */
-const assertShowsBead = (mac: Machine, page: string, issue: string, repo: string) => {
-	assert.ok(page.startsWith(`${mac.temp}/`), `the Bead is rendered to a temporary file: ${page}`);
-	assert.ok(!page.startsWith(`${repo}/`), "the temporary file is outside the project, so an edit cannot write back to the Bead");
+const assertShowsBead = (mac: Machine, beadFile: string, issue: string, repo: string) => {
+	assertTempCopy(mac, beadFile, repo);
 	assert.deepEqual(mac.shown(), [`bead ${issue}\nproject ${repo}\n`], "micro shows bd's rendering of the link's Bead in the link's project");
 };
 
@@ -253,29 +261,28 @@ test("a board link splits the clicked pane to the right and opens micro on the B
 
 		assert.deepEqual(calls(mac.logs.bd), [["show", "fac-qpv.7.2"]], "bd show is asked for the link's Bead");
 		assert.deepEqual(bdProjects(mac), [repo], "bd runs in the link's project");
-		assertShowsBead(mac, pageOf(herdr[1]), "fac-qpv.7.2", repo);
+		assertShowsBead(mac, beadFileOf(herdr[1]), "fac-qpv.7.2", repo);
 	}));
 
-test("a board link opens the Bead without the board, terminal-browser, the default browser or AppleScript, even when the board would fail", async () => {
-	const board = await failingBoard();
-	const mac = makeMachine();
-	try {
-		const repo = mac.project("factory");
+test("a board link opens the Bead without the board, terminal-browser, the default browser or AppleScript, even when the board would fail", () =>
+	withMachine(async (mac) => {
+		const board = await failingBoard();
+		try {
+			const repo = mac.project("factory");
 
-		const result = await mac.click(boardLink(board.port, "fac-qpv.7.2", repo));
-		assert.equal(result.status, 0, result.stderr);
+			const result = await mac.click(boardLink(board.port, "fac-qpv.7.2", repo));
+			assert.equal(result.status, 0, result.stderr);
 
-		assert.equal(calls(mac.logs.micro).length, 1, "micro opens the Bead");
-		assert.equal(board.requests(), 0, "no board page is asked for");
-		assert.equal(board.connections(), 0, "the board's socket is never opened");
-		assert.deepEqual(calls(mac.logs.terminalBrowser), [], "terminal-browser is not involved");
-		assert.deepEqual(calls(mac.logs.open), [], "no default-browser tab is opened");
-		assert.deepEqual(calls(mac.logs.osascript), [], "no AppleScript runs");
-	} finally {
-		await board.close();
-		rmSync(dirname(mac.home), { recursive: true, force: true });
-	}
-});
+			assert.equal(calls(mac.logs.micro).length, 1, "micro opens the Bead");
+			assert.equal(board.requests(), 0, "no board page is asked for");
+			assert.equal(board.connections(), 0, "the board's socket is never opened");
+			assert.deepEqual(calls(mac.logs.terminalBrowser), [], "terminal-browser is not involved");
+			assert.deepEqual(calls(mac.logs.open), [], "no default-browser tab is opened");
+			assert.deepEqual(calls(mac.logs.osascript), [], "no AppleScript runs");
+		} finally {
+			await board.close();
+		}
+	}));
 
 test("a second Ctrl-click opens another pane, with that link's Bead in that link's project", () =>
 	withMachine(async (mac) => {
@@ -305,8 +312,11 @@ test("a second Ctrl-click opens another pane, with that link's Bead in that link
 			],
 			"the first pane still shows the first Bead, and the second its own",
 		);
-		for (const page of runs.map(pageOf)) {
-			assert.ok(page.startsWith(`${mac.temp}/`), `each Bead is rendered to a temporary file: ${page}`);
+		for (const [run, repo] of [
+			[runs[0], factory],
+			[runs[1], personal],
+		] as const) {
+			assertTempCopy(mac, beadFileOf(run), repo);
 		}
 	}));
 

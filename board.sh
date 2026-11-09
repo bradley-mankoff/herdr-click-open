@@ -38,28 +38,31 @@ done
 # The Bead is rendered from the project the link names, not from whichever project this pane
 # happens to be in. An inherited BEADS_DIR would point bd at another database, so it is
 # cleared inside the subshell.
-page=$(mktemp "${TMPDIR:-/tmp}/click-open-bead.XXXXXX")
-error="${page}.err"
-if ! (unset BEADS_DIR; cd "$project" && bd show "$issue") >"$page" 2>"$error"; then
-	echo "click-open: bd show $issue in $project failed:" >&2
-	sed 's/^/  /' "$error" "$page" >&2
-	rm -f "$page" "$error"
+bead_file=$(mktemp "${TMPDIR:-/tmp}/click-open-bead.XXXXXX")
+bead_error="${bead_file}.err"
+
+# Ends a click that will show nothing, taking the rendering with it: only a pane that took the
+# rendering still needs the file once this script exits. A caller that has printed the
+# details itself passes no message.
+fail() {
+	[ $# -eq 0 ] || echo "click-open: $*" >&2
+	rm -f "$bead_file" "$bead_error"
 	exit 1
+}
+
+if ! (unset BEADS_DIR; cd "$project" && bd show "$issue") >"$bead_file" 2>"$bead_error"; then
+	echo "click-open: bd show $issue in $project failed:" >&2
+	sed 's/^/  /' "$bead_error" "$bead_file" >&2
+	fail
 fi
-rm -f "$error"
+rm -f "$bead_error"
 
 # The pane is herdr's, split the way open.sh splits it for a web link; the pane closes when
-# micro exits because the command replaces the pane's shell.
-if ! new_pane=$("$herdr" pane split --pane "$pane" --direction right --focus |
-	python3 -c 'import json, sys; print(json.load(sys.stdin)["result"]["pane"]["pane_id"])'); then
-	echo "click-open: herdr opened no pane" >&2
-	rm -f "$page"
-	exit 1
-fi
-[ -n "$new_pane" ] || { echo "click-open: herdr opened no pane" >&2; rm -f "$page"; exit 1; }
+# micro exits because the command replaces the pane's shell. A split that fails and a split
+# that answers without a pane id are the same failure, so both leave new_pane empty.
+new_pane=$("$herdr" pane split --pane "$pane" --direction right --focus |
+	python3 -c 'import json, sys; print(json.load(sys.stdin)["result"]["pane"]["pane_id"])') || new_pane=
+[ -n "$new_pane" ] || fail "herdr opened no pane"
 
-if ! "$herdr" pane run "$new_pane" "exec micro -readonly true $(printf '%q' "$page")"; then
-	echo "click-open: herdr could not start micro in the new pane" >&2
-	rm -f "$page"
-	exit 1
-fi
+"$herdr" pane run "$new_pane" "exec micro -readonly true $(printf '%q' "$bead_file")" ||
+	fail "herdr could not start micro in the new pane"
