@@ -49,7 +49,7 @@ type Machine = {
 	/** `bd show` fails, as it does in a folder with no Beads database. */
 	failBd: () => void;
 	click: (url: string) => Promise<{ status: number | null; stdout: string; stderr: string }>;
-	/** The temp files the click left in this machine's TMPDIR. */
+	/** The temporary entries the click left in this machine's TMPDIR. */
 	temps: () => string[];
 	/** The content micro was handed, one block per micro call. */
 	shown: () => string[];
@@ -66,6 +66,14 @@ const stub = (path: string, log: string, body: string) => {
 	);
 	chmodSync(path, 0o755);
 };
+
+/** The marker a keeping stand-in writes ahead of each block it keeps, so a reader can cut a log into blocks. */
+const keptMarker = "---KEPT---";
+
+/** A stand-in's body that keeps what it was handed, so an edit after it opened the file cannot hide what the pane first showed. */
+const keepLast = (record: string) => `for last; do :; done
+printf '%s\\n' '${keptMarker}' >> '${record}'
+cat -- "$last" >> '${record}'`;
 
 /** A log file's text, where a log never written is no text. */
 const logged = (path: string): string => (existsSync(path) ? readFileSync(path, "utf8") : "");
@@ -129,26 +137,13 @@ fi
 printf '%s\\n' '{"id":"'"$2"'","title":"Fixture Bead","description":"The board shows this **description**.\\n\\n- one\\n- two","acceptance_criteria":"- met: a fixture criterion","status":"in_progress","issue_type":"task","priority":2,"assignee":"A Human","created_at":"2026-11-09T21:15:44Z"}'`,
 	);
 
-	// The glow stand-in: it keeps the page it was handed, so an edit after it opened the file
-	// cannot hide what the pane first showed.
+	// The glow stand-in: it keeps the page it was handed, the way micro's does.
 	if (renderer) {
-		stub(
-			join(bin, "glow"),
-			logs.glow,
-			`for last; do :; done
-printf '%s\\n' ---SHOWN--- >> '${fixtures.rendered}'
-cat -- "$last" >> '${fixtures.rendered}'`,
-		);
+		stub(join(bin, "glow"), logs.glow, keepLast(fixtures.rendered));
 	}
 
-	// The micro stand-in: it keeps the content it was handed, the way glow's does.
-	stub(
-		join(bin, "micro"),
-		logs.micro,
-		`for last; do :; done
-printf '%s\\n' ---SHOWN--- >> '${fixtures.shown}'
-cat -- "$last" >> '${fixtures.shown}'`,
-	);
+	// The micro stand-in: it keeps the content it was handed.
+	stub(join(bin, "micro"), logs.micro, keepLast(fixtures.shown));
 
 	for (const [name, log] of [
 		["terminal-browser", logs.terminalBrowser],
@@ -186,7 +181,7 @@ cat -- "$last" >> '${fixtures.shown}'`,
 	};
 	const failBd = () => writeFileSync(fixtures.bdFails, "");
 	const temps = () => readdirSync(temp);
-	const blocks = (path: string) => logged(path).split("---SHOWN---\n").slice(1);
+	const blocks = (path: string) => logged(path).split(`${keptMarker}\n`).slice(1);
 	const shown = () => blocks(fixtures.shown);
 	const rendered = () => blocks(fixtures.rendered);
 	return { home, temp, logs, project, failBd, click, temps, shown, rendered };
@@ -220,7 +215,7 @@ const paneFileOf = (run: string[]): string => {
 	return command.slice(command.lastIndexOf(" ") + 1);
 };
 
-/** bd's rendering went to a temporary file outside the project, so an edit cannot write back. */
+/** The page went to a temporary file outside the project, so an edit cannot write back. */
 const assertTempCopy = (mac: Machine, pageFile: string, repo: string) => {
 	assert.ok(pageFile.startsWith(`${mac.temp}/`), `the Bead's page is a temporary file: ${pageFile}`);
 	assert.ok(!pageFile.startsWith(`${repo}/`), "the temporary file is outside the project, so an edit cannot write back to the Bead");
@@ -372,7 +367,7 @@ test("a board link whose Bead bd cannot show opens no pane, and the click says w
 		assert.deepEqual(calls(mac.logs.herdr), [], "no pane is opened for a Bead that could not be shown");
 		assert.deepEqual(calls(mac.logs.glow), [], "glow is not started");
 		assert.deepEqual(calls(mac.logs.micro), [], "micro is not started");
-		assert.deepEqual(mac.temps(), [], "the temporary file is cleaned up");
+		assert.deepEqual(mac.temps(), [], "the click's temporary folder is cleaned up");
 	}));
 
 test("a Mac without the renderer opens the Bead as text below the clicked pane, read-only, never an empty pane", () =>

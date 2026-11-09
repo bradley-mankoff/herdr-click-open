@@ -21,21 +21,27 @@ def text(issue: dict, name: str) -> str:
 
 
 def page(issue: dict) -> str:
+    issue_id = text(issue, "id")
     title = text(issue, "title")
-    heading = f"{text(issue, 'id')}: {title}" if title else text(issue, "id")
+    heading = f"{issue_id}: {title}" if title else issue_id
 
+    # Each field is read once, so a field bd leaves out cannot be tested for and then missed in
+    # the line that appends it.
     details = []
     status = text(issue, "status").replace("_", " ")
     if status:
         details.append(f"- Status: {status}")
-    if text(issue, "issue_type"):
-        details.append(f"- Type: {text(issue, 'issue_type')}")
+    issue_type = text(issue, "issue_type")
+    if issue_type:
+        details.append(f"- Type: {issue_type}")
     if issue.get("priority") is not None:
         details.append(f"- Priority: P{issue['priority']}")
-    if text(issue, "assignee"):
-        details.append(f"- Assignee: {text(issue, 'assignee')}")
-    if text(issue, "created_at"):
-        details.append(f"- Created: {text(issue, 'created_at')[:10]}")
+    assignee = text(issue, "assignee")
+    if assignee:
+        details.append(f"- Assignee: {assignee}")
+    created = text(issue, "created_at")
+    if created:
+        details.append(f"- Created: {created[:10]}")
 
     parts = [f"# {heading}"]
     if details:

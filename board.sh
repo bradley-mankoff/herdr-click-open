@@ -44,7 +44,8 @@ done
 # page gets a folder of its own rather than mktemp's suffix-less name.
 page_dir=$(mktemp -d "${TMPDIR:-/tmp}/click-open-bead.XXXXXX")
 page_file="$page_dir/bead.md"
-bead_error="$page_dir/bd.err"
+# bd's own error output, named for the tool that writes it so the message below can point at it.
+bd_error="$page_dir/bd.err"
 
 # Ends a click that will show nothing, taking the page with it: only a pane that took the page
 # still needs it once this script exits. A caller that has printed the details itself passes no
@@ -55,13 +56,13 @@ fail() {
 	exit 1
 }
 
-if ! (unset BEADS_DIR; cd "$project" && bd show "$issue" --json) 2>"$bead_error" |
+if ! (unset BEADS_DIR; cd "$project" && bd show "$issue" --json) 2>"$bd_error" |
 	python3 "$here/bead-page.py" >"$page_file"; then
 	echo "click-open: could not read $issue in $project:" >&2
-	sed 's/^/  /' "$bead_error" >&2
+	sed 's/^/  /' "$bd_error" >&2
 	fail
 fi
-rm -f "$bead_error"
+rm -f "$bd_error"
 
 # glow renders the page; a Mac without it opens the same page as text in micro below. The pane
 # keeps the Bead in view until the viewer exits.
