@@ -54,7 +54,7 @@
   },
   "hr": {
     "color": "240",
-    "format": "\n--------\n"
+    "format": "\n────────\n"
   },
   "item": {
     "block_prefix": "• "

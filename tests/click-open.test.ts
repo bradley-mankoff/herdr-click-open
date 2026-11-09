@@ -53,6 +53,8 @@ type Machine = {
 	project: (name: string) => string;
 	/** `bd show` fails, as it does in a folder with no Beads database. */
 	failBd: () => void;
+	/** bd answers with this description for the Bead, in place of the fixture's own. */
+	describe: (description: string) => void;
 	click: (url: string) => Promise<{ status: number | null; stdout: string; stderr: string }>;
 	/** The temporary entries the click left in this machine's TMPDIR. */
 	temps: () => string[];
@@ -107,6 +109,7 @@ const makeMachine = (options: { renderer?: boolean } = {}): Machine => {
 	const fixtures = {
 		splits: join(dir, "splits"),
 		bdFails: join(dir, "bd-fails"),
+		description: join(dir, "bd-description.json"),
 		shown: join(dir, "micro-shown"),
 		rendered: join(dir, "glow-rendered"),
 	};
@@ -142,7 +145,9 @@ if [ -f '${fixtures.bdFails}' ]; then
 	echo 'Error: no beads database found' >&2
 	exit 1
 fi
-printf '%s\\n' '{"id":"'"$2"'","title":"Fixture Bead","description":"The board shows this **description**.\\n\\n- one\\n- two","acceptance_criteria":"- met: a fixture criterion","status":"in_progress","issue_type":"task","priority":2,"assignee":"A Human","created_at":"2026-11-09T21:15:44Z"}'`,
+description='"The board shows this **description**.\\n\\n- one\\n- two"'
+if [ -f '${fixtures.description}' ]; then description=$(cat '${fixtures.description}'); fi
+printf '%s\\n' '{"id":"'"$2"'","title":"Fixture Bead","description":'"$description"',"acceptance_criteria":"- met: a fixture criterion","status":"in_progress","issue_type":"task","priority":2,"assignee":"A Human","created_at":"2026-11-09T21:15:44Z"}'`,
 	);
 
 	// The glow stand-in: it keeps the page it was handed, the way micro's does, and writes
@@ -194,12 +199,13 @@ printf '%s\\n' "$PAGER" >> '${logs.pager}'`,
 		return path;
 	};
 	const failBd = () => writeFileSync(fixtures.bdFails, "");
+	const describe = (description: string) => writeFileSync(fixtures.description, JSON.stringify(description));
 	const temps = () => readdirSync(temp);
 	const blocks = (path: string) => logged(path).split(`${keptMarker}\n`).slice(1);
 	const shown = () => blocks(fixtures.shown);
 	const rendered = () => blocks(fixtures.rendered);
 	const pagers = () => logged(logs.pager).split("\n").filter((line) => line !== "");
-	return { home, temp, logs, project, failBd, click, temps, shown, rendered, pagers };
+	return { home, temp, logs, project, failBd, describe, click, temps, shown, rendered, pagers };
 };
 
 /** The calls a stand-in was given, one array of arguments per call; a log never written is no calls. */
@@ -296,6 +302,11 @@ const assertRenderedWithoutMarkers = (run: string[]) => {
 			`the style prints no markdown marker before a ${heading} heading: ${JSON.stringify(style[heading])}`,
 		);
 	}
+	assert.doesNotMatch(
+		style.hr?.format ?? "",
+		/[-*_]{3}/,
+		`the style draws a rule as a line, not as the markdown that makes one: ${JSON.stringify(style.hr)}`,
+	);
 	for (const state of ["ticked", "unticked"]) {
 		const marker = style.task?.[state] ?? "";
 		assert.ok(marker, `the style draws a ${state} task item as a checkbox: ${JSON.stringify(style.task)}`);
@@ -441,6 +452,41 @@ test("a second Ctrl-click opens another pane, with that link's Bead in that link
 		assertRenderedCopy(mac, runs[0], "fac-qpv.7.2", factory);
 		assertRenderedCopy(mac, runs[1], "herdr-click-open-0h4", personal, 1);
 	}));
+
+/** A description with placeholders in angle brackets, the way Beads write them, in text and in code. */
+const placeholders = "Run bd show <id> in <project>.\n\nIn code it stays: `bd show <id>`.\n\n```\nbd show <id> --json\n```";
+
+test("a placeholder in angle brackets reaches glow as text it shows, not as HTML it drops", () =>
+	withMachine(async (mac) => {
+		const repo = mac.project("factory");
+		mac.describe(placeholders);
+
+		const result = await mac.click(boardLink(3917, "fac-qpv.7.2", repo));
+		assert.equal(result.status, 0, result.stderr);
+
+		// glow takes <id> for an HTML tag and shows nothing for it; written \\<id>, glow shows <id>.
+		// Code is shown as written, so a backslash there would show, and none is added.
+		const [page] = mac.rendered();
+		assert.ok(
+			page.includes("## Description\n\nRun bd show \\<id> in \\<project>.\n\nIn code it stays: `bd show <id>`.\n\n```\nbd show <id> --json\n```\n"),
+			`the placeholders are kept for glow to show: ${page}`,
+		);
+	}));
+
+test("a Mac without the renderer shows the placeholders as written, with no backslash added", () =>
+	withMachine(
+		async (mac) => {
+			const repo = mac.project("factory");
+			mac.describe(placeholders);
+
+			const result = await mac.click(boardLink(3917, "fac-qpv.7.2", repo));
+			assert.equal(result.status, 0, result.stderr);
+
+			const [page] = mac.shown();
+			assert.ok(page.includes(`## Description\n\n${placeholders}\n`), `micro shows the description as bd holds it: ${page}`);
+		},
+		{ renderer: false },
+	));
 
 test("a board link whose Bead bd cannot show opens no pane, and the click says why", () =>
 	withMachine(async (mac) => {

@@ -8,10 +8,58 @@ description and the acceptance criteria as the markdown they already are. glow r
 headings, lists and code fences; micro, in the fallback for a Mac without glow, shows the same
 page as text.
 
-Input: the JSON array `bd show --json` prints on stdin. Output: the page on stdout.
+Input: the JSON array `bd show --json` prints on stdin. Output: the page on stdout. With
+--for-glow, every '<' outside code is written as '\\<', because glow takes a Bead's
+placeholders such as <id> for HTML tags and shows nothing for them; micro shows the page as
+written, so the fallback goes without the flag and shows no backslash.
 """
 import json
+import re
 import sys
+
+# A fence line opens or closes a fenced code block; a run of backticks opens or closes a code span.
+FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})")
+BACKTICKS = re.compile(r"`+")
+
+
+def escape_tags_in_line(line: str) -> str:
+    """The line with each '<' outside a code span escaped, so glow shows it instead of a tag."""
+    out = []
+    position = 0
+    while position < len(line):
+        opening = BACKTICKS.search(line, position)
+        if not opening:
+            out.append(line[position:].replace("<", "\\<"))
+            break
+        out.append(line[position:opening.start()].replace("<", "\\<"))
+        # A code span closes at the next run of the same length; an opening run with no closing
+        # one is plain text, so the text after it is escaped as well.
+        closing = re.compile(r"(?<!`)" + re.escape(opening.group()) + r"(?!`)").search(line, opening.end())
+        if not closing:
+            out.append(opening.group())
+            position = opening.end()
+            continue
+        out.append(line[opening.start():closing.end()])
+        position = closing.end()
+    return "".join(out)
+
+
+def escape_tags(markdown: str) -> str:
+    """The markdown with each '<' outside fenced code blocks and code spans escaped."""
+    lines = []
+    fence = None
+    for line in markdown.split("\n"):
+        match = FENCE.match(line)
+        if fence:
+            if match and match.group(1)[0] == fence[0] and len(match.group(1)) >= len(fence):
+                fence = None
+            lines.append(line)
+        elif match:
+            fence = match.group(1)
+            lines.append(line)
+        else:
+            lines.append(escape_tags_in_line(line))
+    return "\n".join(lines)
 
 
 def text(issue: dict, name: str) -> str:
@@ -20,9 +68,11 @@ def text(issue: dict, name: str) -> str:
     return "" if value is None else str(value)
 
 
-def page(issue: dict) -> str:
+def page(issue: dict, for_glow: bool) -> str:
     issue_id = text(issue, "id")
     title = text(issue, "title")
+    if for_glow:
+        title = escape_tags_in_line(title)
     heading = f"{issue_id}: {title}" if title else issue_id
 
     # Each field is read once, so a field bd leaves out cannot be tested for and then missed in
@@ -48,6 +98,8 @@ def page(issue: dict) -> str:
         parts += ["", *details]
     for name, heading_text in (("description", "Description"), ("acceptance_criteria", "Acceptance criteria")):
         body = text(issue, name).strip()
+        if for_glow:
+            body = escape_tags(body)
         if body:
             parts += ["", f"## {heading_text}", "", body]
     return "\n".join(parts) + "\n"
@@ -73,7 +125,7 @@ def main() -> int:
     if not isinstance(issue, dict) or not text(issue, "id"):
         print("bead-page: bd's JSON names no Bead", file=sys.stderr)
         return 1
-    sys.stdout.write(page(issue))
+    sys.stdout.write(page(issue, "--for-glow" in sys.argv[1:]))
     return 0
 
 

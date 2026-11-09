@@ -4,7 +4,7 @@ Ctrl-click a web link, a file link or a Beads board link in a herdr pane to open
 
 A board link needs neither the board nor a browser: the click takes the Bead and project out of the link, asks `bd show --json` in that project, and builds a markdown page from the answer (heading, status, description, acceptance criteria) for glow to render. The pane shows a temporary copy, so nothing typed there reaches the Bead.
 
-The rendered page holds no markdown symbols. glow renders it with the plugin's own style, `glow-style.json`: glamour's dark style, which glow itself uses on a dark terminal, with the `#` prefixes taken off its heading entries so a heading reads as styled text, and with real checkbox glyphs (`☐`, `☑`) where the dark style would print `[ ]`. glow hands the page to less with `--tilde` and a blank prompt, so the pane shows neither less's `~` fill lines nor its `(END)` prompt.
+The rendered page holds no markdown symbols. glow renders it with the plugin's own style, `glow-style.json`: glamour's dark style, which glow itself uses on a dark terminal, with the `#` prefixes taken off its heading entries so a heading reads as styled text, and with real checkbox glyphs (`☐`, `☑`) where the dark style would print `[ ]`, and a drawn line where it would print a rule as `--------`. glow would take a placeholder such as `<id>` for an HTML tag and show nothing for it, so the page glow gets has each `<` outside code escaped; micro's fallback shows the page as bd holds it. glow hands the page to less with `--tilde` and a blank prompt, so the pane shows neither less's `~` fill lines nor its `(END)` prompt.
 
 ## Requirements
 

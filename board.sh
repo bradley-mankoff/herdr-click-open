@@ -62,8 +62,16 @@ fail() {
 	exit 1
 }
 
+# glow takes a placeholder such as <id> for an HTML tag and shows nothing for it, so the page
+# glow gets has each '<' outside code escaped; micro shows the page as written, so it gets the
+# page unescaped.
+page_option=
+if command -v "$glow" >/dev/null 2>&1; then
+	page_option=--for-glow
+fi
+
 if ! (unset BEADS_DIR; cd "$project" && bd show "$issue" --json) 2>"$bd_error" |
-	python3 "$here/bead-page.py" >"$page_file"; then
+	python3 "$here/bead-page.py" ${page_option:+"$page_option"} >"$page_file"; then
 	echo "click-open: could not read $issue in $project:" >&2
 	sed 's/^/  /' "$bd_error" >&2
 	fail
@@ -72,7 +80,7 @@ rm -f "$bd_error"
 
 # glow renders the page; a Mac without it opens the same page as text in micro below. The pane
 # keeps the Bead in view until the viewer exits.
-if command -v "$glow" >/dev/null 2>&1; then
+if [ -n "$page_option" ]; then
 	direction=right
 	# glow-style.json is glow's dark style (from glamour, the renderer behind glow) with two
 	# changes: its heading entries carry no '#' prefix, because a rendered Bead must show a
