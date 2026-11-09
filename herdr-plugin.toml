@@ -1,5 +1,6 @@
 # Ctrl-click a link in any pane to open it beside the conversation. A Bead link on the
-# beads-ui board opens that Bead in the nearest board tab, with the board switched to the
+# beads-ui board opens that Bead in a terminal-browser pane of this herdr workspace, the pane
+# already showing the board or else a new split to the right, with the board switched to the
 # link's project first (board.sh); a web link opens in terminal-browser, and a file:// link
 # opens in micro (open.sh). herdr passes only Ctrl-clicks to plugins, because the mouse
 # reports it gets from the terminal carry no Command key. A Bead id in a Project Manager's

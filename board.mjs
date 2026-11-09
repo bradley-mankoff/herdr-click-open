@@ -7,9 +7,27 @@
  * open board page to that project. The board answers on the same socket, and this exits 1
  * when it does not answer within a few seconds, so a click carries on without it.
  *
+ * A project with no .beads folder has no database to switch to, so it is refused with exit
+ * 2 and a message before the board is asked, leaving the board where it was.
+ *
  *   node board.mjs <port> <project path>
  */
+import { statSync } from "node:fs";
+import { join } from "node:path";
+
 const [port, project] = process.argv.slice(2);
+
+let hasDatabase = false;
+try {
+	hasDatabase = statSync(join(project, ".beads")).isDirectory();
+} catch {
+	// A path that is not there, or not a folder, holds no database either.
+}
+if (!hasDatabase) {
+	console.error(`click-open: ${project} has no .beads folder, so the board is not switched there`);
+	process.exit(2);
+}
+
 const id = "click-open";
 const timeout = 3000;
 

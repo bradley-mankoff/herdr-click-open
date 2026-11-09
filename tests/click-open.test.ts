@@ -1,15 +1,17 @@
 /**
  * The click-open herdr plugin (`fac-qpv.7.2`): Ctrl-clicking a Bead link on the board shows
- * that Bead in the nearest board tab, with the board switched to the link's project first.
+ * that Bead in a terminal-browser pane of the clicked pane's herdr workspace, switching the
+ * board to the link's project first. With no board pane in that workspace, the click splits
+ * the clicked pane and opens terminal-browser there, the way open.sh opens a web link.
  *
  * The seam is the plugin's board action, run the way herdr runs it: `bash board.sh` in a
  * herdr pane, with the clicked link in `HERDR_PLUGIN_CLICKED_URL`. herdr, terminal-browser,
- * the Mac's default browser (through `osascript`) and the board's websocket server are
- * stand-ins at those edges, each writing down how it was called; the tests read those logs
- * instead of looking inside the script.
+ * the Mac's `open` and the board's websocket server are stand-ins at those edges, each
+ * writing down how it was called; the tests read those logs instead of looking inside the
+ * script.
  */
 import assert from "node:assert/strict";
-import { spawn, spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
@@ -111,20 +113,20 @@ async function boardStub() {
 
 type Board = Awaited<ReturnType<typeof boardStub>>;
 
-type Logs = { herdr: string; terminalBrowser: string; osascript: string; open: string };
+type Logs = { herdr: string; terminalBrowser: string; open: string };
 
 type Machine = {
 	home: string;
 	logs: Logs;
+	/** A project folder in this temporary Mac, by default with a Beads database in it. */
+	project: (name: string, options?: { beads?: boolean }) => string;
 	click: (url: string) => Promise<{ status: number | null; stdout: string; stderr: string }>;
-	/** The default browser this Mac's LaunchServices setting names, by bundle id. */
-	setDefaultBrowser: (bundleId: string) => void;
 	/** What `herdr pane list` prints: the panes of the clicked pane's workspace. */
 	herdrPanes: (panes: string[]) => void;
 	/** What `terminal-browser ls --all --json` prints. */
 	terminalBrowsers: (browsers: unknown[]) => void;
-	/** What the default browser's AppleScript lists: one `window<TAB>tab<TAB>url` a line. */
-	browserTabs: (lines: string[]) => void;
+	/** The pane `herdr pane split` opens. */
+	splitPane: (paneId: string) => void;
 };
 
 /** A stand-in at one edge: it writes down each call's arguments, then answers. */
@@ -137,7 +139,7 @@ const stub = (path: string, log: string, body: string) => {
 	chmodSync(path, 0o755);
 };
 
-/** One temporary Mac: a HOME whose settings say which browser, and stand-ins on PATH. */
+/** One temporary Mac: project folders, and stand-ins for herdr and terminal-browser on PATH. */
 const makeMachine = (): Machine => {
 	const dir = mkdtempSync(join(tmpdir(), "factory-click-open-"));
 	const home = join(dir, "home");
@@ -146,26 +148,36 @@ const makeMachine = (): Machine => {
 	const logs: Logs = {
 		herdr: join(dir, "herdr.log"),
 		terminalBrowser: join(dir, "terminal-browser.log"),
-		osascript: join(dir, "osascript.log"),
 		open: join(dir, "open.log"),
 	};
 	const fixtures = {
 		panes: join(dir, "panes.json"),
 		browsers: join(dir, "browsers.json"),
-		tabs: join(dir, "tabs.txt"),
+		pane: join(dir, "pane.json"),
 	};
 	mkdirSync(home, { recursive: true });
+	mkdirSync(bin, { recursive: true });
 	writeFileSync(fixtures.panes, '{"result":{"panes":[]}}\n');
 	writeFileSync(fixtures.browsers, '{"self":null,"browsers":[]}\n');
-	writeFileSync(fixtures.tabs, "");
+	writeFileSync(fixtures.pane, '{"result":{"pane":{"pane_id":"wA:p9"}}}\n');
 
-	const launchServices = join(home, "Library", "Preferences", "com.apple.LaunchServices");
-	mkdirSync(launchServices, { recursive: true });
-	mkdirSync(bin, { recursive: true });
-
-	stub(join(bin, "herdr"), logs.herdr, `case "$1 $2" in "pane list") cat '${fixtures.panes}' ;; esac\nexit 0`);
+	// The herdr stand-in: `pane list` and `pane split` answer from fixtures, and `pane run`
+	// leaves the browser it starts behind for `terminal-browser ls`.
+	stub(
+		join(bin, "herdr"),
+		logs.herdr,
+		`case "$1 $2" in
+"pane list") cat '${fixtures.panes}' ;;
+"pane split") cat '${fixtures.pane}' ;;
+"pane run")
+	# The command's last word is the address terminal-browser opens, so the browser it starts
+	# answers terminal-browser's own listing from then on.
+	printf '{"self":null,"browsers":[{"key":"90109-1","pane":{"tab":"wA:t9","pane":"%s"},"tabs":[{"id":"7","url":"%s","active":true}]}]}\\n' "$3" "\${4##* }" > '${fixtures.browsers}'
+	;;
+esac
+exit 0`,
+	);
 	stub(join(bin, "terminal-browser"), logs.terminalBrowser, `case "$1" in ls) cat '${fixtures.browsers}' ;; esac\nexit 0`);
-	stub(join(bin, "osascript"), logs.osascript, `case "$3" in list) cat '${fixtures.tabs}' ;; esac\nexit 0`);
 	stub(join(bin, "open"), logs.open, "exit 0");
 
 	const env: NodeJS.ProcessEnv = { ...process.env, HOME: home };
@@ -186,22 +198,16 @@ const makeMachine = (): Machine => {
 			child.stderr.setEncoding("utf8").on("data", (chunk) => (stderr += chunk));
 			child.on("close", (status) => resolve({ status, stdout, stderr }));
 		});
-	const setDefaultBrowser = (bundleId: string) =>
-		writeFileSync(
-			join(launchServices, "com.apple.launchservices.secure.plist"),
-			`<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0"><dict><key>LSHandlers</key><array><dict>
-<key>LSHandlerURLScheme</key><string>https</string>
-<key>LSHandlerRoleAll</key><string>${bundleId}</string>
-</dict></array></dict></plist>
-`,
-		);
+	const project = (name: string, { beads = true } = {}) => {
+		const path = join(dir, name);
+		mkdirSync(beads ? join(path, ".beads") : path, { recursive: true });
+		return path;
+	};
 	const herdrPanes = (panes: string[]) =>
 		writeFileSync(fixtures.panes, `${JSON.stringify({ result: { panes: panes.map((pane_id) => ({ pane_id, workspace_id: pane_id.split(":")[0] })) } })}\n`);
 	const terminalBrowsers = (browsers: unknown[]) => writeFileSync(fixtures.browsers, `${JSON.stringify({ self: null, browsers })}\n`);
-	const browserTabs = (lines: string[]) => writeFileSync(fixtures.tabs, lines.map((line) => `${line}\n`).join(""));
-	return { home, logs, click, setDefaultBrowser, herdrPanes, terminalBrowsers, browserTabs };
+	const splitPane = (paneId: string) => writeFileSync(fixtures.pane, `${JSON.stringify({ result: { pane: { pane_id: paneId } } })}\n`);
+	return { home, logs, project, click, herdrPanes, terminalBrowsers, splitPane };
 };
 
 /** The calls a stand-in was given, one array of arguments per call; a log never written is no calls. */
@@ -237,6 +243,20 @@ const assertPageShowsBead = (script: string, repo: string, issue: string) => {
 	);
 };
 
+/** The tab the click chose is the one told to show the Bead, and no default browser is asked. */
+const assertShownInTab = (mac: Machine, browser: string, tab: string, repo: string) => {
+	const shown = calls(mac.logs.terminalBrowser).find((call) => call[0] === "action");
+	assert.ok(shown, "a terminal-browser tab is told to show the Bead");
+	assert.deepEqual(
+		shown.slice(0, 7),
+		["action", "--browser", browser, "--tab", tab, "--follow", "--"],
+		"the tab the click chose is shown the Bead",
+	);
+	assert.equal(shown[7], "eval");
+	assertPageShowsBead(shown[8], repo, "fac-qpv.7.2");
+	assert.deepEqual(calls(mac.logs.open), [], "no default-browser tab is opened");
+};
+
 /** One click against a stand-in board and a temporary Mac, both cleaned up whatever the click did. */
 const withBoardAndMac = async (run: (board: Board, mac: Machine) => Promise<void>) => {
 	const board = await boardStub();
@@ -251,7 +271,7 @@ const withBoardAndMac = async (run: (board: Board, mac: Machine) => Promise<void
 
 test("a board link switches the board to the link's project and shows the Bead in the board's terminal-browser pane in this herdr workspace", () =>
 	withBoardAndMac(async (board, mac) => {
-		const repo = "/Users/thehuman/Developer/personal_code/factory";
+		const repo = mac.project("factory");
 		mac.herdrPanes(["wA:p1", "wA:p3", "wB:p1"]);
 		mac.terminalBrowsers([
 			{
@@ -262,6 +282,11 @@ test("a board link switches the board to the link's project and shows the Bead i
 					{ id: "2", url: `${board.base}#/board?issue=fac-qpv.6.3`, active: true },
 				],
 			},
+			{
+				key: "90107-2",
+				pane: { tab: "wB:t1", pane: "wB:p3" },
+				tabs: [{ id: "1", url: `${board.base}#/board?issue=fac-qpv.6.3`, active: true }],
+			},
 		]);
 
 		const result = await mac.click(boardLink(board.port, "fac-qpv.7.2", repo));
@@ -269,74 +294,48 @@ test("a board link switches the board to the link's project and shows the Bead i
 
 		assertBoardSwitched(board, repo);
 		assert.deepEqual(calls(mac.logs.herdr), [["pane", "list", "--workspace", "wA"]], "herdr is asked which panes this workspace has");
-		const shown = calls(mac.logs.terminalBrowser).find((call) => call[0] === "action");
-		assert.ok(shown, "the board's tab is told to show the Bead");
-		assert.deepEqual(shown.slice(0, 7), ["action", "--browser", "90107-1", "--tab", "2", "--follow", "--"], "the board's tab in this workspace is shown");
-		assert.equal(shown[7], "eval");
-		assertPageShowsBead(shown[8], repo, "fac-qpv.7.2");
-		assert.deepEqual(calls(mac.logs.osascript), [], "no browser was asked for a tab");
+		assertShownInTab(mac, "90107-1", "2", repo);
 	}));
 
-test("a board in another herdr workspace is left alone, and the default browser's board tab is shown instead", () =>
+test("with no board tab in this herdr workspace, the click splits the clicked pane to the right and opens terminal-browser there, then shows the Bead", () =>
 	withBoardAndMac(async (board, mac) => {
-		const repo = "/Users/thehuman/Developer/personal_code/news";
-		mac.setDefaultBrowser("com.apple.safari");
+		const repo = mac.project("factory");
 		mac.herdrPanes(["wA:p1", "wA:p3"]);
+		mac.splitPane("wA:p9");
 		mac.terminalBrowsers([
-			{ key: "90107-1", pane: { tab: "wB:t1", pane: "wB:p3" }, tabs: [{ id: "2", url: `${board.base}#/board?issue=fac-qpv.6.3`, active: true }] },
+			{
+				key: "90107-1",
+				pane: { tab: "wB:t1", pane: "wB:p3" },
+				tabs: [{ id: "2", url: `${board.base}#/board?issue=fac-qpv.6.3`, active: true }],
+			},
 		]);
-		mac.browserTabs(["2\t3\t" + board.base + "#/board?issue=fac-qpv.6.3", "2\t4\thttps://example.com/"]);
 
 		const result = await mac.click(boardLink(board.port, "fac-qpv.7.2", repo));
 		assert.equal(result.status, 0, result.stderr);
 
 		assertBoardSwitched(board, repo);
 		assert.deepEqual(
-			calls(mac.logs.terminalBrowser).filter((call) => call[0] === "action"),
-			[],
-			"the browser showing the board in another workspace is left alone",
+			calls(mac.logs.herdr),
+			[
+				["pane", "list", "--workspace", "wA"],
+				["pane", "split", "--pane", "wA:p1", "--direction", "right", "--focus"],
+				["pane", "run", "wA:p9", `exec terminal-browser open ${board.base}`],
+			],
+			"the clicked pane is split to the right and terminal-browser opens there",
 		);
-		const asked = calls(mac.logs.osascript);
-		assert.deepEqual(asked.map((call) => call.slice(1, 3)), [["Safari", "list"], ["Safari", "run"]], "Safari's tabs are listed, then the board tab is shown in");
-		assert.equal(asked[0].length, 3, "the browser lists every tab, and the click picks the board's");
-		assert.deepEqual(asked[1].slice(3, 5), ["2", "3"], "the board tab's window and tab are the ones shown in");
-		assertPageShowsBead(asked[1][5], repo, "fac-qpv.7.2");
-		assert.deepEqual(calls(mac.logs.open), [], "no new tab is opened");
+		assertShownInTab(mac, "90109-1", "7", repo);
 	}));
 
-test("with no board tab open, the click opens a new tab in the default browser and shows the Bead in it", () =>
+test("a board link to a project with no .beads folder is refused, and the board is left where it was", () =>
 	withBoardAndMac(async (board, mac) => {
-		const repo = "/Users/thehuman/Developer/personal_code/beads-ui";
-		mac.setDefaultBrowser("com.google.chrome");
+		const repo = mac.project("news", { beads: false });
 		mac.herdrPanes(["wA:p1"]);
-		mac.browserTabs(["1\t1\thttps://example.com/"]);
-		mac.terminalBrowsers([]);
 
 		const result = await mac.click(boardLink(board.port, "fac-qpv.7.2", repo));
-		assert.equal(result.status, 0, result.stderr);
-
-		const asked = calls(mac.logs.osascript);
-		assert.deepEqual(
-			asked.map((call) => [call[1], call[2]]),
-			[["Google Chrome", "list"], ["Google Chrome", "open"]],
-			"the default browser's tabs are listed, then a tab is opened in it",
-		);
-		assert.equal(asked[1][3], board.base, "the new tab starts at the board's own address");
-		assertPageShowsBead(asked[1][4], repo, "fac-qpv.7.2");
-		assert.deepEqual(calls(mac.logs.open), [], "the browser opens the tab itself, so no second tab is opened");
-	}));
-
-test("a default browser this plugin cannot run script in gets the link in a new tab", () =>
-	withBoardAndMac(async (board, mac) => {
-		const repo = "/Users/thehuman/Developer/personal_code/factory";
-		mac.setDefaultBrowser("org.mozilla.firefox");
-		mac.herdrPanes(["wA:p1"]);
-		mac.terminalBrowsers([]);
-
-		const result = await mac.click(boardLink(board.port, "fac-qpv.7.2", repo));
-		assert.equal(result.status, 0, result.stderr);
-
-		assert.deepEqual(calls(mac.logs.osascript), [], "no browser is scripted");
-		assert.deepEqual(calls(mac.logs.open), [[boardLink(board.port, "fac-qpv.7.2", repo)]], "the link is opened as it is");
-		assertBoardSwitched(board, repo);
+		assert.notEqual(result.status, 0, "the click reports the missing database");
+		assert.match(result.stderr, /\.beads/, "the message names the missing .beads folder");
+		assert.ok(result.stderr.includes(repo), `the message names the project: ${result.stderr}`);
+		assert.deepEqual(board.messages, [], "the board is not switched to a folder with no database");
+		assert.deepEqual(calls(mac.logs.herdr), [], "no board pane is opened");
+		assert.deepEqual(calls(mac.logs.terminalBrowser), [], "no browser is opened there");
 	}));

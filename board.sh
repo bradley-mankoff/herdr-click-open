@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# Shows the Bead of a Ctrl-clicked board link in the nearest board tab (fac-qpv.7.2).
+# Shows the Bead of a Ctrl-clicked board link in a terminal-browser pane of this herdr
+# workspace (fac-qpv.7.2): the board's own pane when the workspace has one, else a new pane
+# split to the right, the way open.sh opens a web link.
 #
 # A board link is what bead-links.ts writes in a Project Manager's reply:
 #   http://127.0.0.1:3917/#/board?issue=fac-qpv.7.2&workspace=/path/to/repo
@@ -10,58 +12,18 @@
 # in order:
 #   1. switches the board server to the link's project with beads-ui's own set-workspace
 #      message, so the Bead is found whatever project the board showed before;
-#   2. shows the Bead in a board tab of this herdr workspace: a terminal-browser pane
-#      already showing the board, else a tab of the Mac's default browser, else a new tab.
+#   2. shows the Bead in a board tab of this herdr workspace: the terminal-browser pane
+#      already showing the board, else a split to the right with a new terminal-browser
+#      there.
 #
-# The nearest tab is the alternative passed over: always opening a new tab piles up tabs,
-# and a Bead read once is not worth one.
+# The default browser is the alternative passed over: it differs between Macs, it is not
+# beside the conversation, and reaching its tabs took one AppleScript per browser family.
 set -uo pipefail
 here=$(dirname "$(readlink -f "$0")")
 . "$here/shared.sh"
-
-# A JavaScript string literal, for the page to read back the project and the Bead.
-js_string() {
-	local value=${1//\\/\\\\}
-	value=${value//\"/\\\"}
-	printf '"%s"' "$value"
-}
-
-# The app this Mac opens web links with, as a "<family><TAB><app name>" pair: the family is
-# the AppleScript file that can run script in that browser, the app name the one AppleScript
-# knows it by. LaunchServices' handler for https is what the Human sets in System Settings.
-# Prints nothing when the setting cannot be read or names a browser this plugin has no
-# script for.
-scriptable_default_browser() {
-	local plist=$HOME/Library/Preferences/com.apple.LaunchServices/com.apple.launchservices.secure.plist
-	[ -f "$plist" ] || return 0
-	plutil -convert json -o - "$plist" 2>/dev/null | python3 -c '
-import json, sys
-browsers = {
-    "com.apple.safari": ("safari", "Safari"),
-    "com.google.chrome": ("chromium", "Google Chrome"),
-    "com.brave.browser": ("chromium", "Brave Browser"),
-    "com.microsoft.edgemac": ("chromium", "Microsoft Edge"),
-    "com.vivaldi.vivaldi": ("chromium", "Vivaldi"),
-    "org.chromium.chromium": ("chromium", "Chromium"),
-    "company.thebrowser.browser": ("chromium", "Arc"),
-}
-try:
-    handlers = json.load(sys.stdin).get("LSHandlers") or []
-except ValueError:
-    handlers = []
-for field, value in (
-    ("LSHandlerURLScheme", "https"),
-    ("LSHandlerURLScheme", "http"),
-    ("LSHandlerContentType", "com.apple.default-app.web-browser"),
-):
-    for handler in handlers:
-        if handler.get(field) == value and handler.get("LSHandlerRoleAll") in browsers:
-            print("%s\t%s" % browsers[handler["LSHandlerRoleAll"]])
-            sys.exit(0)
-'
-}
-
+pane=${HERDR_PANE_ID:?no pane}
 url=${HERDR_PLUGIN_CLICKED_URL:-}
+
 case $url in
 "") echo "click-open: no link was clicked" >&2; exit 2 ;;
 https://*|http://*) ;;
@@ -84,6 +46,14 @@ for pair in "${pairs[@]}"; do
 	esac
 done
 [ -n "$issue" ] && [ -n "$project" ] || { echo "click-open: the link names no Bead or project: $url" >&2; exit 2; }
+command -v terminal-browser >/dev/null 2>&1 || { echo "click-open: terminal-browser is not installed" >&2; exit 1; }
+
+# A JavaScript string literal, for the page to read back the project and the Bead.
+js_string() {
+	local value=${1//\\/\\\\}
+	value=${value//\"/\\\"}
+	printf '"%s"' "$value"
+}
 
 # The board's own addresses: one place names the hostnames a board tab may show.
 base="http://127.0.0.1:$port/"
@@ -95,69 +65,83 @@ page="$base#/board?issue=$issue"
 js=$(printf 'localStorage.setItem("beads-ui.workspace", %s); location.href = %s;' "$(js_string "$project")" "$(js_string "$page")")
 
 # The board server, so the Bead is found whatever project the board showed. A board that
-# is not running is no reason to refuse the click: the tab below still opens the link.
-node "$here/board.mjs" "$port" "$project" || echo "click-open: the board did not switch to $project" >&2
+# is not running is no reason to refuse the click: the pane below still opens the link.
+node "$here/board.mjs" "$port" "$project"
+case $? in
+0) ;;
+2) exit 2 ;; # board.mjs says why: the folder has no Beads database
+esac
 
-# A terminal-browser pane of this herdr workspace already showing the board is the nearest
-# tab of all: the page beside the conversation moves to the Bead.
-board_tab=
-if [ -n "${HERDR_PANE_ID:-}" ] && command -v terminal-browser >/dev/null 2>&1; then
-	workspace=${HERDR_WORKSPACE_ID:-${HERDR_PANE_ID%%:*}}
-	board_tab=$(
-		python3 -c '
+# A herdr workspace's panes, one id a line.
+workspace_panes() {
+	"$herdr" pane list --workspace "$1" 2>/dev/null | python3 -c '
+import json, sys
+try:
+	panes = (json.load(sys.stdin).get("result") or {}).get("panes") or []
+except ValueError:
+	panes = []
+for pane in panes:
+	if isinstance(pane, dict) and pane.get("pane_id"):
+		print(pane["pane_id"])
+'
+}
+
+# The terminal-browser tab showing the board in one of these panes, as a
+# "<browser key><TAB><tab id>" pair; nothing when none does.
+board_tab_in() {
+	python3 -c '
 import json, sys
 base, local_base, panes, browsers = sys.argv[1:5]
 def load(text):
-    try:
-        return json.loads(text)
-    except ValueError:
-        return None
-running = ((load(panes) or {}).get("result") or {}).get("panes") or []
-ids = {pane.get("pane_id") for pane in running if isinstance(pane, dict)}
+	try:
+		return json.loads(text)
+	except ValueError:
+		return None
+ids = set(panes.split())
 for browser in (load(browsers) or {}).get("browsers") or []:
-    if ((browser.get("pane") or {}).get("pane")) not in ids:
-        continue
-    tabs = [tab for tab in browser.get("tabs") or [] if str(tab.get("url", "")).startswith((base, local_base))]
-    if not tabs:
-        continue
-    tab = next((tab for tab in tabs if tab.get("active")), tabs[0])
-    print("%s\t%s" % (browser.get("key"), tab.get("id")))
-    break
-' "$base" "$localhost_base" "$("$herdr" pane list --workspace "$workspace" 2>/dev/null)" "$(terminal-browser ls --all --json 2>/dev/null)"
-	)
-fi
-if [ -n "$board_tab" ]; then
-	browser=${board_tab%%$'\t'*}
-	tab=${board_tab#*$'\t'}
-	terminal-browser action --browser "$browser" --tab "$tab" --follow -- eval "$js" && exit 0
+	if (browser.get("pane") or {}).get("pane") not in ids:
+		continue
+	tabs = [tab for tab in browser.get("tabs") or [] if str(tab.get("url", "")).startswith((base, local_base))]
+	if not tabs:
+		continue
+	tab = next((tab for tab in tabs if tab.get("active")), tabs[0])
+	print("%s\t%s" % (browser.get("key"), tab.get("id")))
+	break
+' "$base" "$localhost_base" "$1" "$(terminal-browser ls --all --json 2>/dev/null)"
+}
+
+# Shows the Bead in a tab, given as board_tab_in prints it.
+show_bead() {
+	local browser=${1%%$'\t'*}
+	local tab=${1#*$'\t'}
+	terminal-browser action --browser "$browser" --tab "$tab" --follow -- eval "$js"
+}
+
+# A terminal-browser pane of this herdr workspace already showing the board is the nearest
+# tab of all, so it is the one shown in; a click that finds none gets a new pane below.
+workspace=${HERDR_WORKSPACE_ID:-${pane%%:*}}
+board_tab=$(board_tab_in "$(workspace_panes "$workspace")")
+
+if [ -z "$board_tab" ]; then
+	# No board tab here: open one in a split to the right, as open.sh opens a web link. The
+	# split is herdr's, not `terminal-browser open --split`, whose bare Electron crashes in
+	# herdr (open.sh has the details).
+	new_pane=$("$herdr" pane split --pane "$pane" --direction right --focus |
+		python3 -c 'import json, sys; print(json.load(sys.stdin)["result"]["pane"]["pane_id"])')
+	[ -n "$new_pane" ] || { echo "click-open: herdr opened no pane" >&2; exit 1; }
+	"$herdr" pane run "$new_pane" "exec terminal-browser open $(printf '%q' "$base")"
+
+	# The new browser takes a moment to register; once its tab shows in that pane, the Bead
+	# is shown in it. Ten seconds is far longer than terminal-browser takes to start, and
+	# keeps a stuck start from leaving the click hanging.
+	for _ in $(seq 1 50); do
+		board_tab=$(board_tab_in "$new_pane")
+		[ -n "$board_tab" ] && break
+		sleep 0.2
+	done
+	[ -n "$board_tab" ] || { echo "click-open: the board did not open in the new pane" >&2; exit 1; }
 fi
 
-# The Mac's default browser, when it is one this plugin can run script in (Safari or a
-# Chromium browser). Any other browser takes the link as it is: the board server was
-# switched, but no page there can be told to save the project.
-target=$(scriptable_default_browser)
-family=${target%%$'\t'*}
-app=${target#*$'\t'}
-if [ -n "$family" ]; then
-	# The browser lists its own tabs, because only it knows them; the click shows the Bead in
-	# the first tab showing the board, and opens a tab when there is none.
-	tabs=$(osascript "$here/$family.applescript" "$app" list 2>/dev/null) || tabs=
-	window=
-	tab=
-	while IFS=$'\t' read -r w t address; do
-		case $address in
-		"$base"* | "$localhost_base"*) window=$w; tab=$t; break ;;
-		esac
-	done <<<"$tabs"
-	if [ -n "$window" ]; then
-		osascript "$here/$family.applescript" "$app" run "$window" "$tab" "$js" && exit 0
-	else
-		osascript "$here/$family.applescript" "$app" open "$base" "$js" && exit 0
-	fi
-fi
-
-# No browser this plugin can run script in, or none whose tab could be told: the clicked
-# link opens as it is, which is all a browser without AppleScript can take. It names the
-# project but the page reads only its own saved one, so this is the one case that can come
-# back "not found" until mantoni/beads-ui#122 ships a URL parameter that chooses it.
-open "$url"
+# The tab the click chose, whether it was already here or came with the new pane, gets the
+# page that saves the project and moves to the Bead.
+show_bead "$board_tab" || { echo "click-open: terminal-browser did not show the Bead in its tab" >&2; exit 1; }
