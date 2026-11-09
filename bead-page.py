@@ -48,10 +48,17 @@ def page(issue: dict) -> str:
 
 
 def main() -> int:
+    raw = sys.stdin.read()
+    # A bd that failed printed nothing here, or an {"error": ...} object; board.sh shows bd's
+    # own message from its stderr instead.
+    if not raw.strip():
+        return 1
     try:
-        answer = json.load(sys.stdin)
+        answer = json.loads(raw)
     except json.JSONDecodeError as error:
         print(f"bead-page: bd gave no JSON: {error}", file=sys.stderr)
+        return 1
+    if isinstance(answer, dict) and "error" in answer:
         return 1
     if isinstance(answer, list):
         issue = answer[0] if answer else None

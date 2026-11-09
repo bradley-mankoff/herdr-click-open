@@ -245,6 +245,8 @@ const assertRenderedCopy = (mac: Machine, run: string[], issue: string, repo: st
 	const [binary, flag] = command.replace(/^exec /, "").split(" ");
 	assert.equal(basename(binary), "glow", `the pane opens glow: ${command}`);
 	assert.equal(flag, "-p", `glow opens in its pager, a viewer that cannot write: ${command}`);
+	// glow renders only a file it takes for markdown by its name, and shows any other as text.
+	assert.match(paneFileOf(run), /\.md$/, `glow is handed a markdown file, so it renders the page: ${command}`);
 	assertTempCopy(mac, paneFileOf(run), repo);
 	const page = mac.rendered()[index];
 	assert.ok(page, "glow is handed the Bead's page");

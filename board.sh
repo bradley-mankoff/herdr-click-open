@@ -40,15 +40,18 @@ done
 # The Bead is rendered from the project the link names, not from whichever project this pane
 # happens to be in. An inherited BEADS_DIR would point bd at another database, so it is
 # cleared inside the subshell.
-page_file=$(mktemp "${TMPDIR:-/tmp}/click-open-bead.XXXXXX")
-bead_error="${page_file}.err"
+# glow renders only a file whose name ends in .md and shows any other as plain text, so the
+# page gets a folder of its own rather than mktemp's suffix-less name.
+page_dir=$(mktemp -d "${TMPDIR:-/tmp}/click-open-bead.XXXXXX")
+page_file="$page_dir/bead.md"
+bead_error="$page_dir/bd.err"
 
 # Ends a click that will show nothing, taking the page with it: only a pane that took the page
 # still needs it once this script exits. A caller that has printed the details itself passes no
 # message.
 fail() {
 	[ $# -eq 0 ] || echo "click-open: $*" >&2
-	rm -f "$page_file" "$bead_error"
+	rm -rf "$page_dir"
 	exit 1
 }
 
