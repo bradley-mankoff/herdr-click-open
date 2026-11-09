@@ -187,7 +187,7 @@ const bdProjects = (mac: Machine): string[] =>
 /** The temporary file a pane's micro command opened. */
 const pageOf = (run: string[]): string => {
 	const command = run[3];
-	assert.match(command, /^exec micro (?:-readonly true )?/, `the pane runs micro: ${command}`);
+	assert.match(command, /^exec micro -readonly true /, `the pane runs micro read-only: ${command}`);
 	return command.slice(command.lastIndexOf(" ") + 1);
 };
 
