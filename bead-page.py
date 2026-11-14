@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
-"""Builds the markdown page glow renders for a Ctrl-clicked Bead (herdr-click-open-df7).
+"""Builds the markdown page a viewer draws for a Ctrl-clicked Bead (herdr-click-open-g2j).
 
-bd show draws its own boxed layout around the description, and glow would show the box-drawing
-characters as text. This script takes instead the JSON `bd show --json` prints and writes a
-plain markdown page: one heading naming the Bead, a short list of its state, then the
-description and the acceptance criteria as the markdown they already are. glow renders the
-headings, lists and code fences; micro, in the fallback for a Mac without glow, shows the same
-page as text.
+bd show draws its own boxed layout around the description, and a markdown viewer would show the
+box-drawing characters as text. This script takes instead the JSON `bd show --json` prints and
+writes a plain markdown page: one heading naming the Bead, a short list of its state, then the
+description and the acceptance criteria as the markdown they already are. mdd (mddog) draws the
+headings, lists and code fences as images; glow renders them as styled text; micro, the
+fallback for a Mac without either, shows the same page as text.
 
 Input: the JSON array `bd show --json` prints on stdin. Output: the page on stdout. With
---for-glow, every '<' outside code is written as '\\<', because glow takes a Bead's
-placeholders such as <id> for HTML tags and shows nothing for them; micro shows the page as
-written, so the fallback goes without the flag and shows no backslash.
+--escape-tags, every '<' outside code is written as '\\<', because mdd and glow both take a
+Bead's placeholders such as <id> for HTML tags and draw nothing for them; micro shows the page
+as written, so the fallback goes without the flag and shows no backslash.
 """
 import json
 import re
@@ -23,7 +23,7 @@ BACKTICKS = re.compile(r"`+")
 
 
 def escape_tags_in_line(line: str) -> str:
-    """The line with each '<' outside a code span escaped, so glow shows it instead of a tag."""
+    """The line with each '<' outside a code span escaped, so a viewer shows it instead of a tag."""
     out = []
     position = 0
     while position < len(line):
@@ -68,10 +68,10 @@ def text(issue: dict, name: str) -> str:
     return "" if value is None else str(value)
 
 
-def page(issue: dict, for_glow: bool) -> str:
+def page(issue: dict, escape: bool) -> str:
     issue_id = text(issue, "id")
     title = text(issue, "title")
-    if for_glow:
+    if escape:
         title = escape_tags_in_line(title)
     heading = f"{issue_id}: {title}" if title else issue_id
 
@@ -99,7 +99,7 @@ def page(issue: dict, for_glow: bool) -> str:
         parts += ["", *details]
     for name, heading_text in (("description", "Description"), ("acceptance_criteria", "Acceptance criteria")):
         body = text(issue, name).strip()
-        if for_glow:
+        if escape:
             body = escape_tags(body)
         if body:
             parts += ["", f"## {heading_text}", "", body]
@@ -126,7 +126,7 @@ def main() -> int:
     if not isinstance(issue, dict) or not text(issue, "id"):
         print("bead-page: bd's JSON names no Bead", file=sys.stderr)
         return 1
-    sys.stdout.write(page(issue, "--for-glow" in sys.argv[1:]))
+    sys.stdout.write(page(issue, "--escape-tags" in sys.argv[1:]))
     return 0
 
 
