@@ -107,14 +107,13 @@ rm -f "$bd_error"
 # empty. The pane keeps the Bead in view until the viewer exits.
 direction=right
 if [ -n "$have_mdd" ]; then
-	# mdd's edit key runs $EDITOR on the page it draws and then draws the page again. The page
-	# is a throwaway copy, so the pane hands mdd this repo's bead-edit.py as its EDITOR: the
-	# helper opens the Bead's own description in micro and writes a change back to the Bead,
-	# then rebuilds the page (herdr-click-open-bje). mddog gives the editor the page path as its
-	# last argument, a path the helper ignores, so the Bead, its project and the page travel in
-	# the helper's own arguments.
-	editor="$(printf '%q' "$here/bead-edit.py") --id $(printf '%q' "$issue") --project $(printf '%q' "$project") --page $(printf '%q' "$page_file")"
-	viewer=(env "EDITOR=$editor" "$mdd" "$page_file")
+	# mdd's edit key runs $EDITOR on the page it draws and then draws the page again, so the
+	# pane hands mdd this repo's bead-edit.py, with mddog's own page-path argument ignored: the
+	# helper opens the Bead's description in micro and writes a change back to the Bead
+	# (herdr-click-open-bje).
+	editor_args=("$here/bead-edit.py" --id "$issue" --project "$project" --page "$page_file")
+	editor=$(printf '%q ' "${editor_args[@]}")
+	viewer=(env "EDITOR=${editor% }" "$mdd" "$page_file")
 elif [ -n "$have_glow" ]; then
 	# glow hands the rendered page to $PAGER, or to `less -r` when it is unset, and less fills
 	# the pane below a short page with '~' lines and ends its prompt with '(END)'. The pager is

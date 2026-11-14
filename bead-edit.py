@@ -21,12 +21,8 @@ import os
 import subprocess
 import sys
 import tempfile
-from typing import Tuple
 
 HERE = os.path.dirname(os.path.realpath(__file__))
-# The page is rebuilt for mdd, which, like glow, drops a placeholder such as <id> unless its '<'
-# is escaped; board.sh builds the first page with the same flag.
-ESCAPE_TAGS = ["--escape-tags"]
 
 
 class Failure(Exception):
@@ -40,38 +36,55 @@ def bd(project: str, *arguments: str) -> subprocess.CompletedProcess:
     return subprocess.run(["bd", *arguments], cwd=project, env=environment, capture_output=True)
 
 
-def bead(project: str, issue_id: str) -> Tuple[bytes, dict]:
-    """bd's JSON for the Bead and that JSON parsed, from `bd show --json` in the Bead's project."""
+def bead_json(project: str, issue_id: str) -> bytes:
+    """bd's JSON for the Bead, from `bd show --json` in the Bead's project."""
     answer = bd(project, "show", issue_id, "--json")
     if answer.returncode != 0:
         raise Failure(answer.stderr.decode().strip() or f"bd show {issue_id} failed")
+    return answer.stdout
+
+
+def bead(project: str, issue_id: str) -> dict:
+    """The Bead bd's JSON describes, where a JSON that names no Bead is a Failure."""
     try:
-        parsed = json.loads(answer.stdout)
+        parsed = json.loads(bead_json(project, issue_id))
     except json.JSONDecodeError as error:
         raise Failure(f"bd gave no JSON: {error}") from error
     issue = parsed[0] if isinstance(parsed, list) and parsed else parsed
     if not isinstance(issue, dict) or not issue.get("id"):
         raise Failure("bd's JSON names no Bead")
-    return answer.stdout, issue
+    return issue
 
 
 def description(project: str, issue_id: str) -> str:
     """The Bead's description as bd holds it, where a Bead without one is empty."""
-    _json, issue = bead(project, issue_id)
-    value = issue.get("description")
+    value = bead(project, issue_id).get("description")
     return "" if value is None else str(value)
 
 
-def rebuild_page(project: str, issue_id: str, page_path: str, note: str = "") -> None:
-    """Write the page board.sh would build now, then the note ahead of it, in place for mddog."""
-    raw, _issue = bead(project, issue_id)
+def rebuild_page(project: str, issue_id: str, page_path: str, kept_text: str = "") -> None:
+    """Write the page board.sh would build now, in place, for mddog to draw again.
+
+    A kept_text path is where a failed save left the edited description: the page then opens
+    with that, ahead of the Bead's own text, because mddog paints over anything printed while
+    the editor was open.
+    """
+    raw = bead_json(project, issue_id)
+    # The page is rebuilt for mdd, which, like glow, drops a placeholder such as <id> unless its
+    # '<' is escaped; board.sh builds the first page with the same flag.
     built = subprocess.run(
-        [sys.executable, os.path.join(HERE, "bead-page.py"), *ESCAPE_TAGS],
+        [sys.executable, os.path.join(HERE, "bead-page.py"), "--escape-tags"],
         input=raw,
         capture_output=True,
     )
     if built.returncode != 0:
         raise Failure(built.stderr.decode().strip() or "bead-page.py failed")
+    note = ""
+    if kept_text:
+        note = (
+            "# Save failed\n\n"
+            f"Your edited description was not saved to {issue_id}. It is in `{kept_text}`.\n\n"
+        )
     page = note.encode() + built.stdout
     directory = os.path.dirname(page_path) or "."
     handle, replacement = tempfile.mkstemp(dir=directory, prefix=".bead-page-")
@@ -115,14 +128,9 @@ def main() -> int:
 
     update = bd(args.project, "update", args.id, "--body-file", edited_path, "--allow-empty-description")
     if update.returncode != 0:
-        # Nothing typed is lost: the file stays, and the redrawn page names it, because mddog
-        # paints over anything printed while the editor was open.
-        note = (
-            "# Save failed\n\n"
-            f"Your edited description was not saved to {args.id}. It is in `{edited_path}`.\n\n"
-        )
+        # Nothing typed is lost: the file stays, and the redrawn page names it.
         try:
-            rebuild_page(args.project, args.id, args.page, note)
+            rebuild_page(args.project, args.id, args.page, edited_path)
         except Failure as error:
             print(f"bead-edit: could not redraw {args.id}'s page: {error}", file=sys.stderr)
         print(f"bead-edit: could not save {args.id}: {update.stderr.decode().strip()}", file=sys.stderr)

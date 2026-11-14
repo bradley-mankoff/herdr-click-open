@@ -104,10 +104,13 @@ const stub = (path: string, log: string, body: string) => {
 /** The marker a keeping stand-in writes ahead of each block it keeps, so a reader can cut a log into blocks. */
 const keptMarker = "---KEPT---";
 
+/** A stand-in's body that writes the file it has in `$last` into its log as one block. */
+const keep = (record: string) => `printf '%s\\n' '${keptMarker}' >> '${record}'
+	cat -- "$last" >> '${record}'`;
+
 /** A stand-in's body that keeps what it was handed, so an edit after it opened the file cannot hide what the pane first showed. */
 const keepLast = (record: string) => `for last; do :; done
-printf '%s\\n' '${keptMarker}' >> '${record}'
-cat -- "$last" >> '${record}'`;
+${keep(record)}`;
 
 /** A log file's text, where a log never written is no text. */
 const logged = (path: string): string => (existsSync(path) ? readFileSync(path, "utf8") : "");
@@ -215,8 +218,7 @@ printf '%s\\n' '{"id":"'"$2"'","title":"Fixture Bead","description":'"$descripti
 			`${keepLast(fixtures.mddPages)}
 if [ -f '${fixtures.pressE}' ]; then
 	/bin/sh -c "$EDITOR \\"\\$1\\"" sh "$last"
-	printf '%s\\n' '${keptMarker}' >> '${fixtures.mddPages}'
-	cat -- "$last" >> '${fixtures.mddPages}'
+	${keep(fixtures.mddPages)}
 fi`,
 		);
 	}
