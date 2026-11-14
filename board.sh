@@ -69,28 +69,29 @@ fail() {
 }
 
 # Like herdr, a stand-in can name the page's viewer, and the tests name one nothing provides
-# to exercise the fallback for a Mac without it.
+# to exercise the fallback for a Mac without it. installed answers whether this Mac has the
+# tool it is given, by name or by path.
+installed() {
+	command -v "$1" >/dev/null 2>&1
+}
 mdd=${MDD_BIN_PATH:-mdd}
 have_mdd=
-if command -v "$mdd" >/dev/null 2>&1; then
-	have_mdd=1
-fi
+if installed "$mdd"; then have_mdd=1; fi
 glow=${GLOW_BIN_PATH:-glow}
 have_glow=
-if command -v "$glow" >/dev/null 2>&1; then
-	have_glow=1
-fi
+if installed "$glow"; then have_glow=1; fi
 
 # mdd and glow both take a placeholder such as <id> for an HTML tag and draw nothing for it, so
-# the page they get has each '<' outside code escaped; micro shows the page as written, so it
-# gets the page unescaped. mdd was checked by drawing a page with `mdd --headless`: the page
-# written plain draws "Run bd show in .", the escaped one draws "Run bd show <id> in <project>".
-escape=
+# a viewer that draws the page is handed one with each '<' outside code escaped; micro shows
+# the page as written, so it gets the page unescaped. mdd was checked by drawing a page with
+# `mdd --headless`: the page written plain draws "Run bd show in .", the escaped one draws
+# "Run bd show <id> in <project>".
+hides_tags=
 if [ -n "$have_mdd" ] || [ -n "$have_glow" ]; then
-	escape=--escape-tags
+	hides_tags=1
 fi
 if ! (unset BEADS_DIR; cd "$project" && bd show "$issue" --json) 2>"$bd_error" |
-	python3 "$here/bead-page.py" ${escape:+"$escape"} >"$page_file"; then
+	python3 "$here/bead-page.py" ${hides_tags:+--escape-tags} >"$page_file"; then
 	echo "click-open: could not read $issue in $project:" >&2
 	sed 's/^/  /' "$bd_error" >&2
 	fail
@@ -102,11 +103,10 @@ rm -f "$bd_error"
 # fill lines nor its end prompt. A Mac with neither gets the page as text in micro, in a split
 # below the clicked pane, so the text uses the pane's full width instead of a pane that opens
 # empty. The pane keeps the Bead in view until the viewer exits.
+direction=right
 if [ -n "$have_mdd" ]; then
-	direction=right
 	viewer=("$mdd" "$page_file")
 elif [ -n "$have_glow" ]; then
-	direction=right
 	# glow hands the rendered page to $PAGER, or to `less -r` when it is unset, and less fills
 	# the pane below a short page with '~' lines and ends its prompt with '(END)'. The pager is
 	# told to print neither: --tilde leaves the fill lines out, and a prompt of one space shows
@@ -115,6 +115,7 @@ elif [ -n "$have_glow" ]; then
 	pager="less -R --tilde -P ' '"
 	viewer=(env "PAGER=$pager" "$glow" -s "$here/glow-style.json" -p "$page_file")
 else
+	# micro's text takes the pane's full width below the click rather than a narrow pane right.
 	direction=down
 	viewer=(micro -readonly true "$page_file")
 fi

@@ -167,7 +167,7 @@ if [ -f '${fixtures.description}' ]; then description=$(cat '${fixtures.descript
 printf '%s\\n' '{"id":"'"$2"'","title":"Fixture Bead","description":'"$description"',"acceptance_criteria":"- met: a fixture criterion","status":"in_progress","issue_type":"task","priority":2,"assignee":"A Human","created_at":"2026-11-09T21:15:44Z"}'`,
 	);
 
-	// The mdd stand-in: it keeps the page it was handed, the way a real mdd would draw it.
+	// The mdd stand-in: it keeps the page it was handed.
 	if (viewers === "mdd") {
 		stub(join(bin, "mdd"), logs.mdd, keepLast(fixtures.mddPages));
 	}
@@ -303,6 +303,21 @@ const paneFileOf = (run: string[]): string => {
 	return words[words.length - 1];
 };
 
+/**
+ * The click split the clicked pane in the named direction once, and ran one command in the pane
+ * that split opened; the calls herdr was given, so a test can read the command that call ran.
+ */
+const assertSplit = (mac: Machine, direction: "right" | "down"): string[][] => {
+	const herdr = calls(mac.logs.herdr);
+	assert.deepEqual(
+		herdr[0],
+		["pane", "split", "--pane", "wA:p1", "--direction", direction, "--focus"],
+		`the clicked pane is split ${direction}`,
+	);
+	assert.equal(herdr.length, 2, "the click splits once and runs one command in the new pane");
+	return herdr;
+};
+
 /** The page went to a temporary file outside the project, so an edit cannot write back. */
 const assertTempCopy = (mac: Machine, pageFile: string, repo: string) => {
 	assert.ok(pageFile.startsWith(`${mac.temp}/`), `the Bead's page is a temporary file: ${pageFile}`);
@@ -365,9 +380,9 @@ const assertQuietPager = (mac: Machine, index = 0) => {
 /** mdd draws and scrolls the page itself, so the pane hands it the page file and nothing else. */
 const assertMddPage = (mac: Machine, run: string[], issue: string, repo: string, index = 0) => {
 	assert.ok(runsTool(run, "mdd"), `the pane opens mdd: ${paneCommandOf(run)}`);
-	assert.deepEqual(
-		viewerWordsOf(run).slice(1),
-		[paneFileOf(run)],
+	assert.equal(
+		viewerWordsOf(run).length,
+		2,
 		`mdd is handed the page file alone, with no style and no pager: ${paneCommandOf(run)}`,
 	);
 	// The page keeps its .md name for mdd too (herdr-click-open-g2j), as it does for glow.
@@ -436,13 +451,7 @@ test("a board link splits the clicked pane to the right and opens mdd on the Bea
 		const result = await mac.click(boardLink(3917, "fac-qpv.7.2", repo));
 		assert.equal(result.status, 0, result.stderr);
 
-		const herdr = calls(mac.logs.herdr);
-		assert.deepEqual(
-			herdr[0],
-			["pane", "split", "--pane", "wA:p1", "--direction", "right", "--focus"],
-			"the clicked pane is split to the right",
-		);
-		assert.equal(herdr.length, 2, "the click splits once and runs one command");
+		const herdr = assertSplit(mac, "right");
 		assert.deepEqual(herdr[1].slice(0, 3), ["pane", "run", "wA:p9"], "mdd runs in the pane the split opened");
 
 		assert.deepEqual(calls(mac.logs.bd), [["show", "fac-qpv.7.2", "--json"]], "bd show is asked for the link's Bead as JSON");
@@ -504,6 +513,17 @@ test("a second Ctrl-click opens another pane, with that link's Bead in that link
 /** A description with placeholders in angle brackets, the way Beads write them, in text and in code. */
 const placeholders = "Run bd show <id> in <project>.\n\nIn code it stays: `bd show <id>`.\n\n```\nbd show <id> --json\n```";
 
+/**
+ * The page a drawing viewer is handed: each placeholder outside code written '\<id>', so the viewer
+ * shows the text instead of dropping it as a tag, and code as written, where a backslash would show.
+ */
+const assertPlaceholdersKept = (page: string, viewer: string) => {
+	assert.ok(
+		page.includes("## Description\n\nRun bd show \\<id> in \\<project>.\n\nIn code it stays: `bd show <id>`.\n\n```\nbd show <id> --json\n```\n"),
+		`the placeholders are kept for ${viewer} to show as text: ${page}`,
+	);
+};
+
 test("a placeholder in angle brackets reaches mdd as the text mddog draws, not as an HTML tag it drops", () =>
 	withMachine(async (mac) => {
 		const repo = mac.project("factory");
@@ -513,12 +533,8 @@ test("a placeholder in angle brackets reaches mdd as the text mddog draws, not a
 		assert.equal(result.status, 0, result.stderr);
 
 		// mddog 1.0.2 draws an unescaped <id> as nothing and \<id> as <id>, as this test file's
-		// header records. Code is drawn as written, so a backslash there would show, and none is added.
-		const [page] = mac.mddPages();
-		assert.ok(
-			page.includes("## Description\n\nRun bd show \\<id> in \\<project>.\n\nIn code it stays: `bd show <id>`.\n\n```\nbd show <id> --json\n```\n"),
-			`the placeholders are kept for mddog to draw as text: ${page}`,
-		);
+		// header records.
+		assertPlaceholdersKept(mac.mddPages()[0], "mddog");
 	}));
 
 test("a Mac without mdd renders the Bead with glow and its quiet pager, in a split to the right, as before", () =>
@@ -529,13 +545,7 @@ test("a Mac without mdd renders the Bead with glow and its quiet pager, in a spl
 			const result = await mac.click(boardLink(3917, "fac-qpv.7.2", repo));
 			assert.equal(result.status, 0, result.stderr);
 
-			const herdr = calls(mac.logs.herdr);
-			assert.deepEqual(
-				herdr[0],
-				["pane", "split", "--pane", "wA:p1", "--direction", "right", "--focus"],
-				"without mdd the Bead still renders in a split to the right",
-			);
-			assert.equal(herdr.length, 2, "the click still opens one pane");
+			const herdr = assertSplit(mac, "right");
 			assertGlowPage(mac, herdr[1], "fac-qpv.7.2", repo);
 			assert.deepEqual(calls(mac.logs.mdd), [], "mdd is missing, so it cannot open the page");
 		},
@@ -552,12 +562,7 @@ test("a placeholder in angle brackets reaches glow as text it shows, not as HTML
 			assert.equal(result.status, 0, result.stderr);
 
 			// glow takes <id> for an HTML tag and shows nothing for it; written \<id>, glow shows <id>.
-			// Code is shown as written, so a backslash there would show, and none is added.
-			const [page] = mac.glowPages();
-			assert.ok(
-				page.includes("## Description\n\nRun bd show \\<id> in \\<project>.\n\nIn code it stays: `bd show <id>`.\n\n```\nbd show <id> --json\n```\n"),
-				`the placeholders are kept for glow to show: ${page}`,
-			);
+			assertPlaceholdersKept(mac.glowPages()[0], "glow");
 		},
 		{ viewers: "glow" },
 	));
@@ -600,13 +605,7 @@ test("a Mac without mdd or glow opens the Bead as text below the clicked pane, r
 			const result = await mac.click(boardLink(3917, "fac-qpv.7.2", repo));
 			assert.equal(result.status, 0, result.stderr);
 
-			const herdr = calls(mac.logs.herdr);
-			assert.deepEqual(
-				herdr[0],
-				["pane", "split", "--pane", "wA:p1", "--direction", "down", "--focus"],
-				"without a renderer the Bead's text splits below, so it gets the pane's full width",
-			);
-			assert.equal(herdr.length, 2, "the click still opens one pane");
+			const herdr = assertSplit(mac, "down");
 			assert.deepEqual(herdr[1].slice(0, 3), ["pane", "run", "wA:p9"], "micro runs in the pane the split opened");
 
 			const command = paneCommandOf(herdr[1]);
