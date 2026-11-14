@@ -2,7 +2,7 @@
 
 Ctrl-click a web link, a file link or a Beads board link in a herdr pane to open it beside the conversation. A web link opens in terminal-browser, a file link in micro, and a board link opens that Bead's page drawn by [mddog](https://github.com/qu8n/mddog) (`mdd`) in a split to the right of the clicked pane.
 
-A board link needs neither the board nor a browser: the click takes the Bead and project out of the link, asks `bd show --json` in that project, and builds a markdown page from the answer (heading, status, description, acceptance criteria) for mdd to draw. The pane shows a temporary copy, so nothing typed there reaches the Bead.
+A board link needs neither the board nor a browser: the click takes the Bead and project out of the link, asks `bd show --json` in that project, and builds a markdown page from the answer (heading, status, description, acceptance criteria) for mdd to draw. The page is drawn from a temporary copy. In the mdd pane, pressing `e` opens the Bead's description in micro and saves a change back to the Bead with `bd update`, then rebuilds the page for mdd to redraw; an unchanged description writes nothing, and a failed write keeps the edited text in a file named on the redrawn page. The title, status and the other fields stay read-only. The glow and micro fallbacks only read the copy.
 
 mdd draws the page as images through the terminal's kitty graphics protocol, with real fonts and heading sizes, like GitHub, and scrolls, searches and quits on its own keys. It is handed the page file alone: no pager and no style.
 

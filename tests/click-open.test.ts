@@ -8,9 +8,10 @@
  * plugin's own glamour style, whose headings carry no `#` markers, and a pager told to print
  * neither fill lines nor an end prompt, so no markdown symbol and no pager furniture reaches
  * the screen (herdr-click-open-df7). A Mac with neither viewer gets the page as raw text in
- * micro, in a split below the clicked pane. The pane always shows a temporary copy, so no
- * edit reaches the Bead, and neither the board, terminal-browser, the default browser nor
- * AppleScript takes part.
+ * micro, in a split below the clicked pane. The page is a temporary copy, and only mdd's edit
+ * key (e, or v) reaches the Bead: the pane's EDITOR is the plugin's bead-edit.py, which opens
+ * the Bead's description in micro and saves a change back (herdr-click-open-bje). Neither the
+ * board, terminal-browser, the default browser nor AppleScript takes part.
  *
  * mdd and glow both take a placeholder such as <id> for an HTML tag and draw nothing for it,
  * so both are handed a page with each '<' outside code escaped; micro shows the page as
@@ -25,7 +26,7 @@
  * tests read those logs and the content the viewer was handed, not the script's internals.
  */
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -52,6 +53,7 @@ type Logs = {
 	/** The pager glow was told to run, one line per glow call. */
 	pager: string;
 	micro: string;
+	vi: string;
 	terminalBrowser: string;
 	open: string;
 	osascript: string;
@@ -68,6 +70,14 @@ type Machine = {
 	failBd: () => void;
 	/** bd answers with this description for the Bead, in place of the fixture's own. */
 	describe: (description: string) => void;
+	/** mdd is told to press its edit key, e, the way mddog runs the page's `$EDITOR`. */
+	pressE: () => void;
+	/** The editor writes this text into the description file it is handed and quits. */
+	editTo: (description: string) => void;
+	/** `bd update` fails, as it does when the Bead's database cannot be written. */
+	failUpdate: () => void;
+	/** The Bead's description as `bd show --json` prints it in the named project. */
+	show: (issue: string, repo: string) => string;
 	click: (url: string) => Promise<{ status: number | null; stdout: string; stderr: string }>;
 	/** The temporary entries the click left in this machine's TMPDIR. */
 	temps: () => string[];
@@ -94,10 +104,13 @@ const stub = (path: string, log: string, body: string) => {
 /** The marker a keeping stand-in writes ahead of each block it keeps, so a reader can cut a log into blocks. */
 const keptMarker = "---KEPT---";
 
+/** A stand-in's body that writes the file it has in `$last` into its log as one block. */
+const keep = (record: string) => `printf '%s\\n' '${keptMarker}' >> '${record}'
+	cat -- "$last" >> '${record}'`;
+
 /** A stand-in's body that keeps what it was handed, so an edit after it opened the file cannot hide what the pane first showed. */
 const keepLast = (record: string) => `for last; do :; done
-printf '%s\\n' '${keptMarker}' >> '${record}'
-cat -- "$last" >> '${record}'`;
+${keep(record)}`;
 
 /** A log file's text, where a log never written is no text. */
 const logged = (path: string): string => (existsSync(path) ? readFileSync(path, "utf8") : "");
@@ -118,6 +131,7 @@ const makeMachine = (options: { viewers?: Viewers } = {}): Machine => {
 		glow: join(dir, "glow.log"),
 		pager: join(dir, "glow-pager.log"),
 		micro: join(dir, "micro.log"),
+		vi: join(dir, "vi.log"),
 		terminalBrowser: join(dir, "terminal-browser.log"),
 		open: join(dir, "open.log"),
 		osascript: join(dir, "osascript.log"),
@@ -125,7 +139,10 @@ const makeMachine = (options: { viewers?: Viewers } = {}): Machine => {
 	const fixtures = {
 		splits: join(dir, "splits"),
 		bdFails: join(dir, "bd-fails"),
+		updateFails: join(dir, "bd-update-fails"),
 		description: join(dir, "bd-description.json"),
+		pressE: join(dir, "press-e"),
+		edit: join(dir, "micro-edit"),
 		mddPages: join(dir, "mdd-pages"),
 		glowPages: join(dir, "glow-pages"),
 		microPages: join(dir, "micro-pages"),
@@ -153,23 +170,57 @@ exit 0`,
 	);
 
 	// The bd stand-in: it says which project it ran in and how the Bead was asked for, and
-	// answers with JSON for one Bead when it succeeds.
+	// answers with JSON for one Bead when it succeeds. A `bd update --body-file` replaces the
+	// Bead's description with the file's text, so a later `bd show` prints what was saved.
+	// BEADS_DIR must not reach it: bd would then read another project's database, as the real
+	// bd would, and this stand-in fails the way it fails in a folder with no Beads database.
 	stub(
 		join(bin, "bd"),
 		logs.bd,
 		`printf '%s\\n' "$PWD" >> '${logs.bdCwd}'
+if [ -n "\${BEADS_DIR:-}" ]; then
+	echo 'Error: BEADS_DIR points bd at another database' >&2
+	exit 1
+fi
 if [ -f '${fixtures.bdFails}' ]; then
 	echo 'Error: no beads database found' >&2
 	exit 1
+fi
+if [ "$1" = update ]; then
+	if [ -f '${fixtures.updateFails}' ]; then
+		echo 'Error: the Bead could not be updated' >&2
+		exit 1
+	fi
+	shift
+	body=
+	while [ $# -gt 0 ]; do
+		case "$1" in
+		--body-file) body=$2; shift 2 ;;
+		*) shift ;;
+		esac
+	done
+	python3 -c 'import json, sys; open(sys.argv[2], "w").write(json.dumps(open(sys.argv[1]).read()))' "$body" '${fixtures.description}'
+	exit 0
 fi
 description='"The board shows this **description**.\\n\\n- one\\n- two"'
 if [ -f '${fixtures.description}' ]; then description=$(cat '${fixtures.description}'); fi
 printf '%s\\n' '{"id":"'"$2"'","title":"Fixture Bead","description":'"$description"',"acceptance_criteria":"- met: a fixture criterion","status":"in_progress","issue_type":"task","priority":2,"assignee":"A Human","created_at":"2026-11-09T21:15:44Z"}'`,
 	);
 
-	// The mdd stand-in: it keeps the page it was handed.
+	// The mdd stand-in: it keeps the page it was handed. When the test asks it to press e, it
+	// runs the pane's $EDITOR on that page the way mddog does (src/editor.rs: /bin/sh -c with
+	// "$1" appended, which this helper ignores), then draws the page again, so the page it
+	// keeps a second time is what mddog would redraw.
 	if (viewers === "mdd") {
-		stub(join(bin, "mdd"), logs.mdd, keepLast(fixtures.mddPages));
+		stub(
+			join(bin, "mdd"),
+			logs.mdd,
+			`${keepLast(fixtures.mddPages)}
+if [ -f '${fixtures.pressE}' ]; then
+	/bin/sh -c "$EDITOR \\"\\$1\\"" sh "$last"
+	${keep(fixtures.mddPages)}
+fi`,
+		);
 	}
 
 	// The glow stand-in: it keeps the page it was handed, the way micro's does, and writes
@@ -183,10 +234,17 @@ printf '%s\\n' "$PAGER" >> '${logs.pager}'`,
 		);
 	}
 
-	// The micro stand-in: it keeps the content it was handed.
-	stub(join(bin, "micro"), logs.micro, keepLast(fixtures.microPages));
+	// The micro stand-in: it keeps the content it was handed. When the test asks for an edit,
+	// it writes the new text into that file and quits, the way a person would.
+	stub(
+		join(bin, "micro"),
+		logs.micro,
+		`${keepLast(fixtures.microPages)}
+if [ -f '${fixtures.edit}' ]; then cat '${fixtures.edit}' > "$last"; fi`,
+	);
 
 	for (const [name, log] of [
+		["vi", logs.vi],
 		["terminal-browser", logs.terminalBrowser],
 		["open", logs.open],
 		["osascript", logs.osascript],
@@ -197,6 +255,8 @@ printf '%s\\n' "$PAGER" >> '${logs.pager}'`,
 	const env: NodeJS.ProcessEnv = { ...process.env, HOME: home, TMPDIR: temp };
 	// This run may itself be in a herdr pane; the test's own stand-ins are the pane it clicks in.
 	for (const name of Object.keys(env)) if (name.startsWith("HERDR_")) delete env[name];
+	// The pane's editor must be the one the plugin names, not the developer's own $EDITOR.
+	delete env.EDITOR;
 	env.HERDR_PANE_ID = "wA:p1";
 	env.HERDR_WORKSPACE_ID = "wA";
 	// The plugin's own knobs point at this machine's stand-ins, so neither the real herdr nor
@@ -205,6 +265,9 @@ printf '%s\\n' "$PAGER" >> '${logs.pager}'`,
 	env.HERDR_BIN_PATH = join(bin, "herdr");
 	env.MDD_BIN_PATH = viewers === "mdd" ? join(bin, "mdd") : "mdd-not-installed";
 	env.GLOW_BIN_PATH = viewers === "glow" ? join(bin, "glow") : "glow-not-installed";
+	// The pane inherits a BEADS_DIR for another project; both board.sh and the edit helper must
+	// clear it so bd reads the Bead in the link's project. The bd stand-in fails when it is set.
+	env.BEADS_DIR = join(dir, "another-project");
 	const click = (url: string) =>
 		new Promise<{ status: number | null; stdout: string; stderr: string }>((resolve) => {
 			const child = spawn("bash", [join(plugin, "board.sh")], {
@@ -224,13 +287,25 @@ printf '%s\\n' "$PAGER" >> '${logs.pager}'`,
 	};
 	const failBd = () => writeFileSync(fixtures.bdFails, "");
 	const describe = (description: string) => writeFileSync(fixtures.description, JSON.stringify(description));
+	const pressE = () => writeFileSync(fixtures.pressE, "");
+	const editTo = (description: string) => writeFileSync(fixtures.edit, description);
+	const failUpdate = () => writeFileSync(fixtures.updateFails, "");
+	// A person's bd has no BEADS_DIR for another project in its environment, so neither has this call.
+	const show = (issue: string, repo: string): string => {
+		const calledWith: NodeJS.ProcessEnv = { ...env };
+		delete calledWith.BEADS_DIR;
+		const answer = spawnSync(join(bin, "bd"), ["show", issue, "--json"], { cwd: repo, env: calledWith, encoding: "utf8" });
+		assert.equal(answer.status, 0, `bd show succeeds in the fixture: ${answer.stderr}`);
+		const parsed = JSON.parse(answer.stdout);
+		return (Array.isArray(parsed) ? parsed[0] : parsed).description;
+	};
 	const temps = () => readdirSync(temp);
 	const blocks = (path: string) => logged(path).split(`${keptMarker}\n`).slice(1);
 	const mddPages = () => blocks(fixtures.mddPages);
 	const glowPages = () => blocks(fixtures.glowPages);
 	const microPages = () => blocks(fixtures.microPages);
 	const pagers = () => logged(logs.pager).split("\n").filter((line) => line !== "");
-	return { home, temp, logs, project, failBd, describe, click, temps, mddPages, glowPages, microPages, pagers };
+	return { home, temp, logs, project, failBd, describe, pressE, editTo, failUpdate, show, click, temps, mddPages, glowPages, microPages, pagers };
 };
 
 /** The calls a stand-in was given, one array of arguments per call; a log never written is no calls. */
@@ -380,8 +455,12 @@ const assertQuietPager = (mac: Machine, index = 0) => {
 /** mdd draws and scrolls the page itself, so the pane hands it the page file and nothing else. */
 const assertMddPage = (mac: Machine, run: string[], issue: string, repo: string, index = 0) => {
 	assert.ok(runsTool(run, "mdd"), `the pane opens mdd: ${paneCommandOf(run)}`);
+	// The pane hands mdd the page file and nothing after it: no style, no pager. The words
+	// before mdd are env's assignment of the pane's EDITOR, which mdd uses for its edit key.
+	const words = viewerWordsOf(run);
+	const mddAt = words.findIndex((word) => basename(word) === "mdd");
 	assert.equal(
-		viewerWordsOf(run).length,
+		words.length - mddAt,
 		2,
 		`mdd is handed the page file alone, with no style and no pager: ${paneCommandOf(run)}`,
 	);
@@ -458,6 +537,90 @@ test("a board link splits the clicked pane to the right and opens mdd on the Bea
 		assert.deepEqual(bdProjects(mac), [repo], "bd runs in the link's project");
 		assertMddPage(mac, herdr[1], "fac-qpv.7.2", repo);
 		assert.deepEqual(calls(mac.logs.glow), [], "glow is not started when mdd is installed");
+	}));
+
+test("pressing e in the mdd pane opens micro on the Bead's description, not vi and not the page file", () =>
+	withMachine(async (mac) => {
+		const repo = mac.project("factory");
+		mac.pressE();
+
+		const result = await mac.click(boardLink(3917, "fac-qpv.7.2", repo));
+		assert.equal(result.status, 0, result.stderr);
+
+		const herdr = assertSplit(mac, "right");
+		const pageFile = paneFileOf(herdr[1]);
+		const [opened] = calls(mac.logs.micro);
+		assert.ok(opened, "pressing e opens micro");
+		const descriptionFile = opened[opened.length - 1];
+		assert.notEqual(descriptionFile, pageFile, "micro opens a file of its own, not the page mdd draws");
+		assert.ok(
+			descriptionFile.startsWith(`${mac.temp}/`),
+			`micro opens a temporary file for the description: ${descriptionFile}`,
+		);
+		assert.deepEqual(calls(mac.logs.vi), [], "vi is not started");
+		assert.equal(
+			mac.microPages()[0],
+			"The board shows this **description**.\n\n- one\n- two",
+			"micro opens the Bead's description as bd holds it, without the page's heading and state",
+		);
+	}));
+
+test("saving a changed description in micro writes it to the Bead, and the mddog page shows the new text", () =>
+	withMachine(async (mac) => {
+		const repo = mac.project("factory");
+		const changed = "A rewritten description.\n\n- with a new list item";
+		mac.pressE();
+		mac.editTo(changed);
+
+		const result = await mac.click(boardLink(3917, "fac-qpv.7.2", repo));
+		assert.equal(result.status, 0, result.stderr);
+
+		assert.equal(mac.show("fac-qpv.7.2", repo), changed, "bd show prints the text saved in micro");
+		const pages = mac.mddPages();
+		assert.equal(pages.length, 2, "mddog draws the page again when micro exits");
+		assert.ok(
+			pages[1].includes(`## Description\n\n${changed}\n`),
+			`the redrawn page shows the description saved in the Bead: ${pages[1]}`,
+		);
+	}));
+
+test("quitting micro without a change writes nothing to the Bead", () =>
+	withMachine(async (mac) => {
+		const repo = mac.project("factory");
+		mac.pressE();
+
+		const result = await mac.click(boardLink(3917, "fac-qpv.7.2", repo));
+		assert.equal(result.status, 0, result.stderr);
+
+		assert.deepEqual(
+			calls(mac.logs.bd).filter((call) => call[0] === "update"),
+			[],
+			"an unchanged description is never written",
+		);
+		assert.equal(
+			mac.show("fac-qpv.7.2", repo),
+			"The board shows this **description**.\n\n- one\n- two",
+			"the Bead keeps the description it had",
+		);
+	}));
+
+test("a failed write keeps the edited description in a file the helper names", () =>
+	withMachine(async (mac) => {
+		const repo = mac.project("factory");
+		const edited = "Text that could not be saved.\n\n- keep me";
+		mac.pressE();
+		mac.editTo(edited);
+		mac.failUpdate();
+
+		const result = await mac.click(boardLink(3917, "fac-qpv.7.2", repo));
+		assert.equal(result.status, 0, result.stderr);
+
+		const named = result.stderr.match(/your text is in (\S+)/)?.[1];
+		assert.ok(named, `the helper names the file it kept: ${result.stderr}`);
+		assert.equal(readFileSync(named, "utf8"), edited, "the named file holds exactly what was typed");
+		const pages = mac.mddPages();
+		assert.equal(pages.length, 2, "mddog draws the page again when micro exits");
+		assert.ok(pages[1].includes(named), `the redrawn page names the file that kept the text: ${pages[1]}`);
 	}));
 
 test("a board link opens the Bead without the board, terminal-browser, the default browser or AppleScript, even when the board would fail", () =>
