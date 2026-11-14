@@ -18,8 +18,10 @@
 # dark terminal, with the '#' prefixes removed from its heading entries and checkbox glyphs in
 # place of the dark style's '[ ]' task markers.
 #
-# The page is a copy, so an edit cannot reach the Bead; mdd and glow only read it. micro opens
-# it read-only.
+# The page is a copy that glow and micro only read. In the mdd pane, mdd's edit key ('e' or
+# 'v') runs the pane's $EDITOR, which board.sh points at this repo's bead-edit.py: it opens the
+# Bead's description in micro, writes a change back to the Bead and rebuilds the page for
+# mdd's redraw (herdr-click-open-bje).
 #
 # A board link is what bead-links.ts writes in a Project Manager's reply:
 #   http://127.0.0.1:3917/#/board?issue=fac-qpv.7.2&workspace=/path/to/repo
@@ -105,7 +107,14 @@ rm -f "$bd_error"
 # empty. The pane keeps the Bead in view until the viewer exits.
 direction=right
 if [ -n "$have_mdd" ]; then
-	viewer=("$mdd" "$page_file")
+	# mdd's edit key runs $EDITOR on the page it draws and then draws the page again. The page
+	# is a throwaway copy, so the pane hands mdd this repo's bead-edit.py as its EDITOR: the
+	# helper opens the Bead's own description in micro and writes a change back to the Bead,
+	# then rebuilds the page (herdr-click-open-bje). mddog gives the editor the page path as its
+	# last argument, a path the helper ignores, so the Bead, its project and the page travel in
+	# the helper's own arguments.
+	editor="$(printf '%q' "$here/bead-edit.py") --id $(printf '%q' "$issue") --project $(printf '%q' "$project") --page $(printf '%q' "$page_file")"
+	viewer=(env "EDITOR=$editor" "$mdd" "$page_file")
 elif [ -n "$have_glow" ]; then
 	# glow hands the rendered page to $PAGER, or to `less -r` when it is unset, and less fills
 	# the pane below a short page with '~' lines and ends its prompt with '(END)'. The pager is
