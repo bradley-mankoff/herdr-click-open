@@ -2,26 +2,20 @@
 # Opens the Bead of a Ctrl-clicked board link as a drawn page, in a split to the right of the
 # clicked pane (herdr-click-open-df7, herdr-click-open-g2j). The click parses the Bead and
 # project out of the link, asks `bd show --json` in that project for the Bead, builds a
-# markdown page from the answer (bead-page.py) and opens mdd on the page. mdd (mddog) draws
-# the page as images through the terminal's kitty graphics protocol, with real fonts and
-# heading sizes, the way GitHub draws it, and scrolls, searches and quits on its own keys, so
-# it is handed the page file alone: no pager and no style. A Mac without mdd renders the same
-# page with glow; a Mac with neither gets the page as raw text in micro. A renderer rather than
-# micro, a text editor that cannot draw markdown: bd show's own boxed layout would reach any
-# viewer as text, so the page is built from bd's JSON instead. It never asks the board,
-# terminal-browser, the default browser or AppleScript, so a link opens even when the board
-# would show an error, and both Macs behave the same.
+# markdown page from the answer (bead-page.py) and opens the viewer on the page. The viewer is
+# chosen the way open.sh chooses one for a Markdown file (shared.sh's rendered_viewer): mdd
+# (mddog) first, which draws the page as images through the terminal's kitty graphics protocol,
+# with real fonts and heading sizes, the way GitHub draws it; then glow, with the plugin's style
+# and a quiet pager; then micro, which shows the page as raw text. A renderer rather than micro,
+# a text editor that cannot draw markdown: bd show's own boxed layout would reach any viewer as
+# text, so the page is built from bd's JSON instead. It never asks the board, terminal-browser,
+# the default browser or AppleScript, so a link opens even when the board would show an error,
+# and both Macs behave the same.
 #
-# The glow fallback keeps markdown's symbols off the screen, so glow is handed the style in
-# glow-style.json rather than its own default, and the pager is told to print neither its fill
-# lines nor its end prompt. glow-style.json is glamour's dark style, the one glow uses on a
-# dark terminal, with the '#' prefixes removed from its heading entries and checkbox glyphs in
-# place of the dark style's '[ ]' task markers.
-#
-# The page is a copy that glow and micro only read. In the mdd pane, mdd's edit key ('e' or
-# 'v') runs the pane's $EDITOR, which board.sh points at this repo's bead-edit.py: it opens the
-# Bead's description in micro, writes a change back to the Bead and rebuilds the page for
-# mdd's redraw (herdr-click-open-bje).
+# The page is a copy that the viewers only read. In the mdd pane, mdd's edit key ('e' or 'v')
+# runs the pane's $EDITOR, which board.sh points at this repo's bead-edit.py: it opens the
+# Bead's description in micro, writes a change back to the Bead and rebuilds the page for mdd's
+# redraw (herdr-click-open-bje).
 #
 # A board link is what bead-links.ts writes in a Project Manager's reply:
 #   http://127.0.0.1:3917/#/board?issue=fac-qpv.7.2&workspace=/path/to/repo
@@ -70,28 +64,29 @@ fail() {
 	exit 1
 }
 
-# Like herdr, a stand-in can name the page's viewer, and the tests name one nothing provides
-# to exercise the fallback for a Mac without it. installed answers whether this Mac has the
-# tool it is given, by name or by path.
-installed() {
-	command -v "$1" >/dev/null 2>&1
-}
-mdd=${MDD_BIN_PATH:-mdd}
-have_mdd=
-if installed "$mdd"; then have_mdd=1; fi
-glow=${GLOW_BIN_PATH:-glow}
-have_glow=
-if installed "$glow"; then have_glow=1; fi
-
 # mdd and glow both take a placeholder such as <id> for an HTML tag and draw nothing for it, so
 # a viewer that draws the page is handed one with each '<' outside code escaped; micro shows
 # the page as written, so it gets the page unescaped. mdd was checked by drawing a page with
 # `mdd --headless`: the page written plain draws "Run bd show in .", the escaped one draws
-# "Run bd show <id> in <project>".
+# "Run bd show <id> in <project>". The viewer is chosen before bd is asked, because the choice
+# says whether the page is escaped.
+#
+# mdd's edit key runs $EDITOR on the page it draws, so the pane hands mdd this repo's
+# bead-edit.py, with mddog's own page-path argument ignored: the helper opens the Bead's
+# description in micro and writes a change back to the Bead (herdr-click-open-bje).
+editor_args=("$here/bead-edit.py" --id "$issue" --project "$project" --page "$page_file")
+editor=$(printf '%q ' "${editor_args[@]}")
+direction=right
 hides_tags=
-if [ -n "$have_mdd" ] || [ -n "$have_glow" ]; then
+if rendered_viewer "$page_file" "${editor% }"; then
 	hides_tags=1
+else
+	# micro's text takes the pane's full width below the click rather than a narrow pane right,
+	# and the pane keeps the Bead in view until the viewer exits.
+	direction=down
+	viewer=(micro -readonly true "$page_file")
 fi
+
 if ! (unset BEADS_DIR; cd "$project" && bd show "$issue" --json) 2>"$bd_error" |
 	python3 "$here/bead-page.py" ${hides_tags:+--escape-tags} >"$page_file"; then
 	echo "click-open: could not read $issue in $project:" >&2
@@ -99,34 +94,6 @@ if ! (unset BEADS_DIR; cd "$project" && bd show "$issue" --json) 2>"$bd_error" |
 	fail
 fi
 rm -f "$bd_error"
-
-# mdd draws the page itself, so it is handed no style and no pager. A Mac without it renders
-# the same page with glow, which needs the plugin's style and a pager told to print neither
-# fill lines nor its end prompt. A Mac with neither gets the page as text in micro, in a split
-# below the clicked pane, so the text uses the pane's full width instead of a pane that opens
-# empty. The pane keeps the Bead in view until the viewer exits.
-direction=right
-if [ -n "$have_mdd" ]; then
-	# mdd's edit key runs $EDITOR on the page it draws and then draws the page again, so the
-	# pane hands mdd this repo's bead-edit.py, with mddog's own page-path argument ignored: the
-	# helper opens the Bead's description in micro and writes a change back to the Bead
-	# (herdr-click-open-bje).
-	editor_args=("$here/bead-edit.py" --id "$issue" --project "$project" --page "$page_file")
-	editor=$(printf '%q ' "${editor_args[@]}")
-	viewer=(env "EDITOR=${editor% }" "$mdd" "$page_file")
-elif [ -n "$have_glow" ]; then
-	# glow hands the rendered page to $PAGER, or to `less -r` when it is unset, and less fills
-	# the pane below a short page with '~' lines and ends its prompt with '(END)'. The pager is
-	# told to print neither: --tilde leaves the fill lines out, and a prompt of one space shows
-	# nothing where less would print '(END)'. It travels in the pane's own command, so glow has
-	# it however herdr starts the pane.
-	pager="less -R --tilde -P ' '"
-	viewer=(env "PAGER=$pager" "$glow" -s "$here/glow-style.json" -p "$page_file")
-else
-	# micro's text takes the pane's full width below the click rather than a narrow pane right.
-	direction=down
-	viewer=(micro -readonly true "$page_file")
-fi
 
 # The pane is herdr's, split the way open.sh splits it for a web link; the pane closes when the
 # viewer exits because the command replaces the pane's shell. A split that fails and a split
