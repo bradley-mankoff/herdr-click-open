@@ -1,11 +1,12 @@
 # Ctrl-click a link in any pane to open it beside the conversation. A Bead link opens that
 # Bead's page drawn by mdd (mddog) in a split to the right of the clicked pane, with bd show
-# run in the link's project (board.sh). A Mac without mdd renders the same page with glow and a
-# quiet pager; a Mac with neither shows it as text in micro in a split below. A web link opens
-# in terminal-browser, and a file:// link opens in micro (open.sh). herdr passes only
-# Ctrl-clicks to plugins, because the mouse reports it gets from the terminal carry no Command
-# key. A Bead id in a Project Manager's reply becomes a board link through the bead-links
-# extension (fac-qpv.7.1).
+# run in the link's project (board.sh); in that pane, pressing e opens the Bead's description
+# in micro and saves a change back to the Bead (bead-edit.py). A Mac without mdd renders the
+# same page with glow and a quiet pager; a Mac with neither shows it as text in micro in a
+# split below. A web link opens in terminal-browser, and a file:// link opens in micro
+# (open.sh). herdr passes only Ctrl-clicks to plugins, because the mouse reports it gets from
+# the terminal carry no Command key. A Bead id in a Project Manager's reply becomes a board
+# link through the bead-links extension (fac-qpv.7.1).
 #
 # The board handler comes first: herdr checks the handlers in this order, and a board link
 # is a web link as well.
@@ -13,7 +14,7 @@ id = "click-open"
 name = "Click Open"
 version = "0.3.0"
 min_herdr_version = "0.9.0"
-description = "Ctrl-click a board link, web link or file link to open the Bead's page in mdd, the file in micro, or the page in terminal-browser, beside the conversation."
+description = "Ctrl-click a board link, web link or file link to open the Bead's page in mdd, where e edits the Bead's description, the file in micro, or the page in terminal-browser, beside the conversation."
 platforms = ["macos"]
 
 [[actions]]
