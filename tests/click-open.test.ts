@@ -23,9 +23,10 @@
  * a Bead link and `bash open.sh` for a file link (herdr-click-open-3aq), in a herdr pane, with the
  * clicked link in `HERDR_PLUGIN_CLICKED_URL`.
  *
- * herdr, bd, mdd, glow and micro are stand-ins at those edges, each writing down how it was called; the tools that
- * must not take part are stand-ins too, so their logs show a call that never happened. The
- * tests read those logs and the content the viewer was handed, not the script's internals.
+ * herdr, bd, mdd, glow and micro are stand-ins at those edges, each writing down how it was
+ * called; the tools that must not take part are stand-ins too, so their logs show a call that
+ * never happened. The tests read those logs and the content the viewer was handed, not the
+ * script's internals.
  */
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";

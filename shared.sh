@@ -34,6 +34,7 @@ glow=${GLOW_BIN_PATH:-glow}
 # it however herdr starts the pane. glow is given the plugin's style, glow-style.json, rather
 # than its own default, so no markdown symbol reaches the screen.
 rendered_viewer() {
+	# shellcheck disable=SC2034 # viewer is read by the script that called rendered_viewer
 	if installed "$mdd"; then
 		viewer=(env "EDITOR=$2" "$mdd" "$1")
 	elif installed "$glow"; then
