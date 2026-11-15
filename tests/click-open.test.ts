@@ -19,9 +19,11 @@
  * drawing a page through `mdd --headless`: the unescaped page draws "Run bd show in .", and
  * the escaped one draws "Run bd show <id> in <project>." with no backslash.
  *
- * The seam is the plugin's board action, run the way herdr runs it: `bash board.sh` in a
- * herdr pane, with the clicked link in `HERDR_PLUGIN_CLICKED_URL`. herdr, bd, mdd, glow and
- * micro are stand-ins at those edges, each writing down how it was called; the tools that
+ * The seams are the plugin's two click actions, run the way herdr runs them: `bash board.sh` for
+ * a Bead link and `bash open.sh` for a file link (herdr-click-open-3aq), in a herdr pane, with the
+ * clicked link in `HERDR_PLUGIN_CLICKED_URL`.
+ *
+ * herdr, bd, mdd, glow and micro are stand-ins at those edges, each writing down how it was called; the tools that
  * must not take part are stand-ins too, so their logs show a call that never happened. The
  * tests read those logs and the content the viewer was handed, not the script's internals.
  */
@@ -43,6 +45,9 @@ const boardLink = (port: number, issue: string, repo: string): string =>
 
 /** Which of the page's viewers a temporary Mac has installed: mdd (mddog) first, then glow, then neither. */
 type Viewers = "mdd" | "glow" | "none";
+
+/** The plugin's click actions: board.sh for a Bead link, open.sh for a web or file link. */
+type ClickScript = "board.sh" | "open.sh";
 
 type Logs = {
 	herdr: string;
@@ -78,7 +83,7 @@ type Machine = {
 	failUpdate: () => void;
 	/** The Bead's description as `bd show --json` prints it in the named project. */
 	show: (issue: string, repo: string) => string;
-	click: (url: string) => Promise<{ status: number | null; stdout: string; stderr: string }>;
+	click: (url: string, script?: ClickScript) => Promise<{ status: number | null; stdout: string; stderr: string }>;
 	/** The temporary entries the click left in this machine's TMPDIR. */
 	temps: () => string[];
 	/** The page mdd was handed, one block per mdd call. */
@@ -268,9 +273,9 @@ if [ -f '${fixtures.edit}' ]; then cat '${fixtures.edit}' > "$last"; fi`,
 	// The pane inherits a BEADS_DIR for another project; both board.sh and the edit helper must
 	// clear it so bd reads the Bead in the link's project. The bd stand-in fails when it is set.
 	env.BEADS_DIR = join(dir, "another-project");
-	const click = (url: string) =>
+	const click = (url: string, script: ClickScript = "board.sh") =>
 		new Promise<{ status: number | null; stdout: string; stderr: string }>((resolve) => {
-			const child = spawn("bash", [join(plugin, "board.sh")], {
+			const child = spawn("bash", [join(plugin, script)], {
 				cwd: home,
 				env: { ...env, HERDR_PLUGIN_CLICKED_URL: url },
 			});
@@ -782,3 +787,112 @@ test("a Mac without mdd or glow opens the Bead as text below the clicked pane, r
 		},
 		{ viewers: "none" },
 	));
+
+/** The link a file click carries, as file-links.ts writes it: the file's path, then #L42 or #L42C5 for a line. */
+const fileLink = (path: string, fragment = ""): string => `file://${path}${fragment}`;
+
+/** A Markdown file in a temporary project, with the text the test starts from. */
+const markdownFile = (mac: Machine, text: string): string => {
+	const file = join(mac.project("notes"), "plan.md");
+	writeFileSync(file, text);
+	return file;
+};
+
+test("a Ctrl-clicked Markdown file opens mdd on the file itself in a split to the right, with micro as its editor", () =>
+	withMachine(async (mac) => {
+		const text = "# Plan\n\nA fixture plan.\n";
+		const file = markdownFile(mac, text);
+
+		const result = await mac.click(fileLink(file), "open.sh");
+		assert.equal(result.status, 0, result.stderr);
+
+		const herdr = assertSplit(mac, "right");
+		assert.deepEqual(herdr[1].slice(0, 3), ["pane", "run", "wA:p9"], "mdd runs in the pane the split opened");
+		const words = viewerWordsOf(herdr[1]);
+		assert.deepEqual(
+			[words[0], words[1], basename(words[2]), words[3], words.length],
+			["env", "EDITOR=micro", "mdd", file, 4],
+			`mdd is handed the file alone, with micro as the editor for its edit key: ${paneCommandOf(herdr[1])}`,
+		);
+		assert.deepEqual(mac.mddPages(), [text], "mdd draws the file as it is on disk");
+		assert.deepEqual(calls(mac.logs.micro), [], "micro is not started until e is pressed");
+		assert.deepEqual(calls(mac.logs.glow), [], "glow is not started when mdd is installed");
+	}));
+
+test("pressing e on a Markdown file opens micro on that file, and quitting micro redraws it with the saved change", () =>
+	withMachine(async (mac) => {
+		const file = markdownFile(mac, "# Plan\n\nA fixture plan.\n");
+		const changed = "# Plan\n\nA revised plan.\n";
+		mac.pressE();
+		mac.editTo(changed);
+
+		const result = await mac.click(fileLink(file), "open.sh");
+		assert.equal(result.status, 0, result.stderr);
+
+		const [opened] = calls(mac.logs.micro);
+		assert.deepEqual(opened, [file], "micro opens the file itself, not a copy");
+		assert.equal(readFileSync(file, "utf8"), changed, "the save writes the file mdd draws");
+		const pages = mac.mddPages();
+		assert.equal(pages.length, 2, "mddog draws the file again when micro exits");
+		assert.equal(pages[1], changed, "the redrawn page shows the saved change");
+	}));
+
+test("a Ctrl-clicked Markdown file opens glow with the plugin's style and quiet pager on the file, when mdd is missing", () =>
+	withMachine(
+		async (mac) => {
+			const text = "# Plan\n\nA fixture plan.\n";
+			const file = markdownFile(mac, text);
+
+			const result = await mac.click(fileLink(file), "open.sh");
+			assert.equal(result.status, 0, result.stderr);
+
+			const herdr = assertSplit(mac, "right");
+			assert.ok(runsTool(herdr[1], "glow"), `the pane opens glow: ${paneCommandOf(herdr[1])}`);
+			assert.equal(paneFileOf(herdr[1]), file, "glow is handed the file itself");
+			assertRenderedWithoutMarkers(herdr[1]);
+			assertQuietPager(mac);
+			assert.deepEqual(mac.glowPages(), [text], "glow draws the file as it is on disk");
+			assert.deepEqual(calls(mac.logs.mdd), [], "mdd is missing, so it is not started");
+		},
+		{ viewers: "glow" },
+	));
+
+test("a Ctrl-clicked Markdown file opens in micro at its line, in a split to the right, when neither viewer is installed", () =>
+	withMachine(
+		async (mac) => {
+			const file = markdownFile(mac, "# Plan\n\nA fixture plan.\n");
+
+			const result = await mac.click(fileLink(file, "#L42C5"), "open.sh");
+			assert.equal(result.status, 0, result.stderr);
+
+			const herdr = assertSplit(mac, "right");
+			assert.deepEqual(viewerWordsOf(herdr[1]), ["micro", file, "+42:5"], "micro opens the file at the clicked line and column");
+		},
+		{ viewers: "none" },
+	));
+
+test("a rendered Markdown file drops the #L line suffix, since mddog cannot jump to a line", () =>
+	withMachine(async (mac) => {
+		const file = markdownFile(mac, "# Plan\n\nA fixture plan.\n");
+
+		const result = await mac.click(fileLink(file, "#L42"), "open.sh");
+		assert.equal(result.status, 0, result.stderr);
+
+		const herdr = assertSplit(mac, "right");
+		assert.deepEqual(viewerWordsOf(herdr[1]).slice(-1), [file], "mdd is handed the file with no line suffix");
+		assert.ok(runsTool(herdr[1], "mdd"), `the pane opens mdd: ${paneCommandOf(herdr[1])}`);
+	}));
+
+test("a Ctrl-clicked file that is not Markdown opens in micro at its line, even when mdd is installed", () =>
+	withMachine(async (mac) => {
+		const file = join(mac.project("notes"), "notes.txt");
+		writeFileSync(file, "plain text\n");
+
+		const result = await mac.click(fileLink(file, "#L42"), "open.sh");
+		assert.equal(result.status, 0, result.stderr);
+
+		const herdr = assertSplit(mac, "right");
+		assert.deepEqual(viewerWordsOf(herdr[1]), ["micro", file, "+42:1"], "micro opens the text file at the clicked line");
+		assert.deepEqual(calls(mac.logs.mdd), [], "mdd is not started for a file that is not Markdown");
+		assert.deepEqual(calls(mac.logs.glow), [], "glow is not started for a file that is not Markdown");
+	}));

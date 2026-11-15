@@ -3,7 +3,11 @@
 # herdr action, board.sh, takes the board links that herdr's manifest matches first.
 #
 # A file:// URL may end in #L42 or #L42C5 (file-links.ts writes those); micro takes them as
-# +LINE:COL.
+# +LINE:COL. A Markdown file (.md) is drawn by the same viewer board.sh picks for a Bead's page,
+# mdd (mddog) first, then glow, then micro (shared.sh's rendered_viewer). mdd cannot jump to a
+# line, so a rendered file drops the #L suffix, and it is handed the file itself, so its edit key
+# runs micro on that file (herdr-click-open-3aq). Any other file, or a Mac with neither viewer,
+# opens in micro.
 #
 # micro rather than an Electron editor: micro is a small terminal editor that is
 # ready as soon as the pane opens, where the earlier tode (terminal-code) needed
@@ -36,7 +40,9 @@ file://*)
 		path=${path%%#*}
 	fi
 	path=$(decode "$path")
-	if [[ $fragment =~ ^L([0-9]+)(C([0-9]+))?$ ]]; then
+	if [[ $path == *.md ]] && rendered_viewer "$path" micro; then
+		command=("${viewer[@]}")
+	elif [[ $fragment =~ ^L([0-9]+)(C([0-9]+))?$ ]]; then
 		command=(micro "$path" "+${BASH_REMATCH[1]}:${BASH_REMATCH[3]:-1}")
 	else
 		command=(micro "$path")

@@ -3,8 +3,8 @@
 # run in the link's project (board.sh); in that pane, pressing e opens the Bead's description
 # in micro and saves a change back to the Bead (bead-edit.py). A Mac without mdd renders the
 # same page with glow and a quiet pager; a Mac with neither shows it as text in micro in a
-# split below. A web link opens in terminal-browser, and a file:// link opens in micro
-# (open.sh). herdr passes only Ctrl-clicks to plugins, because the mouse reports it gets from
+# split below. A web link opens in terminal-browser, and a file:// link opens in micro, or a
+# Markdown file (.md) in mdd, glow or micro (open.sh, herdr-click-open-3aq). herdr passes only Ctrl-clicks to plugins, because the mouse reports it gets from
 # the terminal carry no Command key. A Bead id in a Project Manager's reply becomes a board
 # link through the bead-links extension (fac-qpv.7.1).
 #
@@ -41,6 +41,6 @@ action = "open"
 
 [[link_handlers]]
 id = "file"
-title = "Open in micro"
+title = "Open in micro, or Markdown rendered"
 pattern = "^file://"
 action = "open"
